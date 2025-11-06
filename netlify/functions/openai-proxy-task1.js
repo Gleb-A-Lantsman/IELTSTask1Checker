@@ -142,17 +142,24 @@ Description fragment: "${content}"`;
 
 // --- Visualization helper ---
 async function visualizeDescription(content) {
-  const axios = require('axios');
+  const axios = require("axios");
   try {
     const prompt = `
-Create a plain, minimal, IELTS-style academic visual based solely on the student's written description below.
+Read the student's written description and determine what kind of IELTS Task 1 visual it refers to (table, line graph, bar chart, pie chart, map, or process). 
+Then, draw that type of visual in a clean, minimal academic style.
 
-Requirements:
-- Absolutely NO decorative elements. The goal is to look like an IELTS exam visual.
-- If it is a table, make a table
-- Otherwise, if it is a visual, show only neutral geometric shapes (bars, lines, or cells) to represent trends and comparisons.Use a flat 2-D design, white background, thin grey gridlines. Use only 2–4 colours.
+Rules for rendering:
+• Plain 2-D layout on white background.
+• No text, numbers, flags, icons, or people.
+• Only thin grey gridlines and 2–4 muted colours.
+• If it describes a table → draw a simple grid table (rows + columns).
+• If it describes a line graph → draw 2–4 coloured lines with an x- and y-axis.
+• If it describes a bar chart → draw grouped vertical bars.
+• If it describes a pie chart → draw a circle divided into coloured slices.
+• If it describes a map → draw two simple outline maps side-by-side.
+• If it describes a process → draw 4–6 rectangles connected by arrows.
 
-Student's description:
+Student’s description:
 """
 ${content}
 """`;
@@ -168,7 +175,7 @@ ${content}
       },
       {
         headers: {
-          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
           "Content-Type": "application/json"
         },
         timeout: 60000
@@ -177,8 +184,10 @@ ${content}
 
     return response.data.data[0].url;
   } catch (error) {
-    console.error("Error generating visualization:", error.response?.data || error.message);
+    console.error(
+      "Error generating visualization:",
+      error.response?.data || error.message
+    );
     return null;
   }
 }
-
