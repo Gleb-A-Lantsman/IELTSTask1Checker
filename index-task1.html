@@ -400,6 +400,7 @@
         const API_BASE = 'https://ubiquitous-malasada.netlify.app/.netlify/functions';
 
 // Load available images when category changes
+// Load available images when category changes
 categorySelect.addEventListener('change', async () => {
   const category = categorySelect.value;
   if (!category) {
@@ -412,18 +413,16 @@ categorySelect.addEventListener('change', async () => {
   imageSelectorContainer.style.display = 'block';
 
   try {
-    // 1️⃣ Define your GitHub repo and folder path
     const owner = "Gleb-A-Lantsman";
     const repo = "IELTSTask1Checker";
     const visualsPath = `visuals/${category}`;
     const githubApiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${visualsPath}`;
 
-    // 2️⃣ Fetch list of image files from GitHub
     const response = await fetch(githubApiUrl);
     if (!response.ok) throw new Error(`GitHub fetch failed: ${response.status}`);
     const files = await response.json();
 
-    // 3️⃣ Filter valid image files
+    // Filter only valid image files
     const imageFiles = files.filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f.name));
 
     if (imageFiles.length === 0) {
@@ -431,11 +430,10 @@ categorySelect.addEventListener('change', async () => {
       return;
     }
 
-    // 4️⃣ Save locally
+    // Store them locally and build dropdown
     availableImages[category] = imageFiles;
-
-    // 5️⃣ Populate dropdown with file names
     imageSelect.innerHTML = '<option value="">-- Choose an image --</option>';
+
     imageFiles.forEach((img, index) => {
       const option = document.createElement('option');
       option.value = index;
@@ -451,12 +449,6 @@ categorySelect.addEventListener('change', async () => {
   }
 });
 
-          } catch (error) {
-            console.error('Error fetching images:', error);
-            imageSelect.innerHTML = '<option value="">-- Error loading images --</option>';
-            showError('Failed to connect to image service.');
-          }
-        });
 
         // Load selected image
         loadImageBtn.addEventListener('click', () => {
@@ -466,7 +458,7 @@ categorySelect.addEventListener('change', async () => {
           }
 
           const image = availableImages[currentCategory][imageIndex];
-          loadImage(image.url);
+          loadImage(image.download_url);
         });
 
         // Load random image
