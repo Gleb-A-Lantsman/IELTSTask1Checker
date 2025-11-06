@@ -1,0 +1,223 @@
+const axios = require('axios');
+
+exports.handler = async function(event, context) {
+  // Enable CORS
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Content-Type": "application/json"
+  };
+  
+  // Handle preflight OPTIONS request
+  if (event.httpMethod === "OPTIONS") {
+    return {
+      statusCode: 200,
+      headers
+    };
+  }
+  
+  try {
+    const { content, requestType, taskType, imageUrl } = JSON.parse(event.body);
+    
+    // Different system prompts based on request type
+    let systemPrompt;
+    let userPrompt;
+    let generateImage = false;
+    
+    if (requestType === 'help') {
+      systemPrompt = `You are a helpful writing assistant for IELTS Task 1 (visual description). When students click "Help Me!", identify the SINGLE most important issue and provide focused guidance:
+
+If there's no overview statement or it's in the wrong place:
+- Format your response as: "<strong>Missing content:</strong> [5-10 word hint about writing an overview]"
+
+If key features or trends are missing:
+- Format your response as: "<strong>Missing content:</strong> [5-10 word hint about what data to describe]"
+
+If there are no comparisons or the structure is unclear:
+- Format your response as: "<strong>Structure issue:</strong> [5-10 word hint about organizing the description]"
+
+If data is described inaccurately or numbers are wrong:
+- Format your response as: "<strong>Data accuracy:</strong> [5-10 word hint about checking the visual]"
+
+If the description is too repetitive or uses limited vocabulary:
+- Format your response as: "<strong>Word choice:</strong> [suggest specific words to replace or vary]"
+
+If the grammar is faulty:
+- Format your response as: "<strong>Grammar check:</strong> [sentence to review]"
+
+If the essay is generally good:
+- Format your response as: "<strong>Good progress!</strong> Your description is taking shape well. Ready for full feedback?"
+
+Choose only ONE category and keep your hint brief and actionable.`;
+      
+      userPrompt = `Task type: ${taskType || 'visual description'}
+Student's description so far: "${content}"`;
+      
+    } else if (requestType === 'full-feedback') {
+      systemPrompt = `You are an expert IELTS Task 1 assessor. Analyze this visual description according to the four Task 1 criteria. Provide balanced feedback suitable for a B2 ESL student.
+
+Structure your response with these exact sections (use <strong> tags):
+
+<strong>Task Achievement:</strong>
+Evaluate if the student:
+- Provided a clear overview of main trends/features
+- Selected and reported key information appropriately
+- Highlighted important comparisons
+- Included relevant data/figures
+- Met the 150-word minimum
+
+<strong>Coherence and Cohesion:</strong>
+Evaluate:
+- Overall organization and paragraphing
+- Use of cohesive devices (linking words, references)
+- Logical progression of ideas
+- Clear topic sentences
+
+<strong>Lexical Resource:</strong>
+Evaluate:
+- Range of vocabulary for describing trends/data
+- Accuracy of word choice
+- Variety in language (avoiding repetition)
+- Use of appropriate academic/formal vocabulary
+
+<strong>Grammatical Range and Accuracy:</strong>
+Evaluate:
+- Variety of sentence structures
+- Accuracy of grammar
+- Use of appropriate tenses (usually present or past)
+- Complex sentences where appropriate
+
+Keep each section concise (2-3 sentences). Be constructive and specific.`;
+
+      userPrompt = `Task type: ${taskType || 'visual description'}
+Task image URL: ${imageUrl}
+
+Student's description:
+${content}
+
+Provide feedback on how well this description represents the visual data.`;
+      
+      generateImage = true;
+      
+    } else {
+      // Regular feedback during typing
+      systemPrompt = `You are a helpful writing assistant for IELTS Task 1. Provide brief, constructive feedback on the student's description in progress. Focus on one key improvement. Keep your response under 50 words and be specific.`;
+      userPrompt = `Task type: ${taskType}
+Description fragment: "${content}"`;
+    }
+    
+    // Generate text feedback
+    const feedbackResponse = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'system',
+            content: systemPrompt
+          },
+          {
+            role: 'user',
+            content: userPrompt
+          }
+        ],
+        max_tokens: requestType === 'full-feedback' ? 600 : 200
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const feedback = feedbackResponse.data.choices[0].message.content;
+    
+    // Generate image if requested (for full feedback only)
+    let generatedImageUrl = null;
+    
+    if (generateImage && content.length > 100) {
+      try {
+        // Create a prompt for DALL-E based on the student's description
+        const imagePrompt = await createImagePrompt(content, taskType);
+        
+        const imageResponse = await axios.post(
+          'https://api.openai.com/v1/images/generations',
+          {
+            model: 'dall-e-3',
+            prompt: imagePrompt,
+            n: 1,
+            size: '1024x1024',
+            quality: 'standard'
+          },
+          {
+            headers: {
+              'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
+        
+        generatedImageUrl = imageResponse.data.data[0].url;
+      } catch (imageError) {
+        console.error('Error generating image:', imageError.message);
+        // Continue without image - feedback is still valuable
+      }
+    }
+    
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ 
+        feedback,
+        generatedImageUrl
+      })
+    };
+    
+  } catch (error) {
+    console.error('Error:', error);
+    let errorMessage = 'Unable to generate feedback at this time.';
+    
+    if (error.response) {
+      console.error('API Error:', error.response.data);
+      errorMessage += ` Error: ${error.response.status} - ${error.response.data.error?.message || 'API error'}. `;
+    } else if (error.request) {
+      errorMessage += ' Network error - couldn\'t connect to the API. ';
+    } else {
+      errorMessage += ` ${error.message}. `;
+    }
+    
+    errorMessage += 'Please try again!';
+    
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ error: true, feedback: errorMessage })
+    };
+  }
+};
+
+// Helper function to create DALL-E prompt from student's description
+async function createImagePrompt(studentDescription, taskType) {
+  // Extract key information from the description to create a visual
+  const taskTypeMap = {
+    'table': 'data table with rows and columns',
+    'line-graph': 'line graph showing trends over time',
+    'bar-chart': 'bar chart comparing different categories',
+    'pie-chart': 'pie chart showing proportions and percentages',
+    'flowchart': 'flowchart or process diagram with steps',
+    'maps': 'map showing geographical information or changes'
+  };
+
+  const visualType = taskTypeMap[taskType] || 'chart or graph';
+
+  // Create a prompt that will generate a similar visual based on the description
+  const prompt = `Create a clean, professional ${visualType} that represents the following data description. 
+Make it look like an IELTS Task 1 visual with clear labels, title, and appropriate formatting. Use simple, clear design.
+
+Based on this description: ${studentDescription.substring(0, 800)}
+
+Style: Clean, professional, educational chart/graph suitable for IELTS exam. Include axis labels, title, and legend if needed.`;
+
+  return prompt;
+}
