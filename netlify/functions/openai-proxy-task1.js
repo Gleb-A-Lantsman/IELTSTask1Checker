@@ -145,11 +145,12 @@ async function visualizeDescription(content) {
   const axios = require('axios');
   try {
     const prompt = `
-Read this student's written description of a chart, table, or diagram.
-Generate a clean, professional, educational-style image that matches what the student described.
+Create a plain, minimal, IELTS-style academic visual based solely on the student's written description below.
 
-Do NOT include text labels, numbers, or captions.
-Use simple colours, white background, clear shapes, and realistic proportions.
+Requirements:
+- Absolutely NO decorative elements. The goal is to look like an IELTS exam visual.
+- If it is a table, make a table
+- Otherwise, if it is a visual, show only neutral geometric shapes (bars, lines, or cells) to represent trends and comparisons.Use a flat 2-D design, white background, thin grey gridlines. Use only 2–4 colours.
 
 Student's description:
 """
@@ -157,18 +158,18 @@ ${content}
 """`;
 
     const response = await axios.post(
-      'https://api.openai.com/v1/images/generations',
+      "https://api.openai.com/v1/images/generations",
       {
-        model: 'dall-e-3',
+        model: "dall-e-3",
         prompt,
         n: 1,
-        size: '1024x1024',
-        quality: 'standard'
+        size: "1024x1024",
+        quality: "standard"
       },
       {
         headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
+          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json"
         },
         timeout: 60000
       }
@@ -176,7 +177,8 @@ ${content}
 
     return response.data.data[0].url;
   } catch (error) {
-    console.error('Error generating visualization:', error.response?.data || error.message);
+    console.error("Error generating visualization:", error.response?.data || error.message);
     return null;
   }
 }
+
