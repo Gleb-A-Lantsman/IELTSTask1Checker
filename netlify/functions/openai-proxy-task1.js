@@ -1,27 +1,27 @@
 const axios = require('axios');
 
 exports.handler = async function(event, context) {
-  // --- Basic CORS setup ---
   const headers = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type",
     "Content-Type": "application/json"
   };
 
-  // --- Handle OPTIONS (preflight) requests ---
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 200, headers };
   }
 
   try {
-    const { content, requestType } = JSON.parse(event.body || '{}');
+    const { content, requestType, taskType, imageUrl } = JSON.parse(event.body || '{}');
 
-    // --- Route 1: Visualization only (student description → image) ---
-    if (requestType === "visualize-only") {
-      console.log("Generating visualization from description...");
+    let systemPrompt;
+    let userPrompt;
+    let generateImage = false;
 
+    // ========== NEW ROUTE: VISUALIZE ONLY ==========
+    if (requestType === 'visualize-only') {
+      console.log("Generating visualization directly from description...");
       const generatedImageUrl = await visualizeDescription(content);
-
       return {
         statusCode: 200,
         headers,
@@ -32,44 +32,124 @@ exports.handler = async function(event, context) {
       };
     }
 
-    // --- Default fallback for unsupported request types ---
+    // ========== HELP MODE ==========
+    if (requestType === 'help') {
+      systemPrompt = `You are a helpful writing assistant for IELTS Task 1 (visual description). When students click "Help Me!", identify the SINGLE most important issue and provide focused guidance:
+
+If there's no overview statement or it's in the wrong place:
+- Format your response as: "<strong>Missing content:</strong> [5-10 word hint about writing an overview]"
+
+If key features or trends are missing:
+- Format your response as: "<strong>Missing content:</strong> [5-10 word hint about what data to describe]"
+
+If there are no comparisons or the structure is unclear:
+- Format your response as: "<strong>Structure issue:</strong> [5-10 word hint about organizing the description]"
+
+If data is described inaccurately or numbers are wrong:
+- Format your response as: "<strong>Data accuracy:</strong> [5-10 word hint about checking the visual]"
+
+If the description is too repetitive or uses limited vocabulary:
+- Format your response as: "<strong>Word choice:</strong> [suggest specific words to replace or vary]"
+
+If the grammar is faulty:
+- Format your response as: "<strong>Grammar check:</strong> [sentence to review]"
+
+If the essay is generally good:
+- Format your response as: "<strong>Good progress!</strong> Your description is taking shape well. Ready for full feedback?"`;
+
+      userPrompt = `Task type: ${taskType || 'visual description'}
+Student's description: "${content}"`;
+    }
+
+    // ========== FULL FEEDBACK MODE ==========
+    else if (requestType === 'full-feedback') {
+      systemPrompt = `You are an expert IELTS Task 1 assessor. Analyze this visual description according to the four Task 1 criteria. Provide balanced feedback suitable for a B2 ESL student.
+
+Structure your response with these exact sections (use <strong> tags):
+
+<strong>Task Achievement:</strong>
+<strong>Coherence and Cohesion:</strong>
+<strong>Lexical Resource:</strong>
+<strong>Grammatical Range and Accuracy:</strong>
+
+Be specific, constructive, and concise.`;
+
+      userPrompt = `Task type: ${taskType || 'visual description'}
+Task image URL: ${imageUrl}
+
+Student's description:
+${content}
+
+Provide feedback on how well this description represents the visual data.`;
+
+      generateImage = true;
+    }
+
+    // ========== LIVE TYPING FEEDBACK ==========
+    else {
+      systemPrompt = `You are a helpful writing assistant for IELTS Task 1. Provide brief, constructive feedback (under 50 words) on the student's description.`;
+      userPrompt = `Task type: ${taskType}
+Description fragment: "${content}"`;
+    }
+
+    // --- Get text feedback ---
+    const feedbackResponse = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        max_tokens: requestType === 'full-feedback' ? 600 : 200
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const feedback = feedbackResponse.data.choices[0].message.content;
+
+    // --- Generate visualization for full feedback ---
+    let generatedImageUrl = null;
+    if (generateImage && content.length > 100) {
+      generatedImageUrl = await visualizeDescription(content);
+    }
+
     return {
-      statusCode: 400,
+      statusCode: 200,
       headers,
       body: JSON.stringify({
-        error: true,
-        feedback: "Unsupported requestType. Use 'visualize-only'."
+        feedback,
+        generatedImageUrl
       })
     };
 
   } catch (error) {
-    console.error("Error:", error);
-    let message = "Unable to generate visualization at this time.";
-    if (error.response) {
-      console.error("API error:", error.response.data);
-      message += ` API Error: ${error.response.status} - ${error.response.data.error?.message || 'Unknown issue'}`;
-    }
+    console.error('Error:', error);
+    const msg = error.response?.data?.error?.message || error.message;
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: true, feedback: message })
+      body: JSON.stringify({ error: true, feedback: msg })
     };
   }
 };
 
 
-
-// --- Helper function to generate visualization using DALL-E 3 ---
+// --- Visualization helper ---
 async function visualizeDescription(content) {
+  const axios = require('axios');
   try {
     const prompt = `
-You are generating an educational-style visual that represents the student's written description of a chart, table, or diagram.
+Read this student's written description of a chart, table, or diagram.
+Generate a clean, professional, educational-style image that matches what the student described.
 
-Read the student's text carefully and imagine what visual data representation (line graph, bar chart, map, or table) best fits it.
-
-Then, create an image that visually represents the trends, comparisons, or structures mentioned — without using any actual words or numbers.
-
-Keep the design clean and minimalist: white background, clear axes, simple colours, and no text labels.
+Do NOT include text labels, numbers, or captions.
+Use simple colours, white background, clear shapes, and realistic proportions.
 
 Student's description:
 """
@@ -77,29 +157,26 @@ ${content}
 """`;
 
     const response = await axios.post(
-      "https://api.openai.com/v1/images/generations",
+      'https://api.openai.com/v1/images/generations',
       {
-        model: "dall-e-3",
+        model: 'dall-e-3',
         prompt,
         n: 1,
-        size: "1024x1024",
-        quality: "standard"
+        size: '1024x1024',
+        quality: 'standard'
       },
       {
         headers: {
-          "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json"
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
         },
         timeout: 60000
       }
     );
 
-    const imageUrl = response.data.data[0].url;
-    console.log("Image generated successfully:", imageUrl);
-    return imageUrl;
-
+    return response.data.data[0].url;
   } catch (error) {
-    console.error("Error generating visualization:", error.response?.data || error.message);
+    console.error('Error generating visualization:', error.response?.data || error.message);
     return null;
   }
 }
