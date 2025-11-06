@@ -138,8 +138,12 @@ Description fragment: "${content}"`;
     
     if (generateImage && content.length > 100) {
       try {
-        // Create a prompt for DALL-E based on the student's description
-        const imagePrompt = await createImagePrompt(content, taskType);
+        console.log('Attempting to generate comparison image...');
+        
+        // Create a prompt for DALL-E based on the task type
+        const imagePrompt = createImagePrompt(taskType);
+        
+        console.log('DALL-E prompt:', imagePrompt.substring(0, 100) + '...');
         
         const imageResponse = await axios.post(
           'https://api.openai.com/v1/images/generations',
@@ -148,20 +152,24 @@ Description fragment: "${content}"`;
             prompt: imagePrompt,
             n: 1,
             size: '1024x1024',
-            quality: 'standard'
+            quality: 'standard',
+            style: 'natural'
           },
           {
             headers: {
               'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
               'Content-Type': 'application/json'
-            }
+            },
+            timeout: 60000 // 60 second timeout
           }
         );
         
         generatedImageUrl = imageResponse.data.data[0].url;
+        console.log('Image generated successfully');
       } catch (imageError) {
-        console.error('Error generating image:', imageError.message);
+        console.error('Error generating image:', imageError.response?.data || imageError.message);
         // Continue without image - feedback is still valuable
+        // Don't fail the whole request just because image generation failed
       }
     }
     
@@ -197,27 +205,21 @@ Description fragment: "${content}"`;
   }
 };
 
-// Helper function to create DALL-E prompt from student's description
-async function createImagePrompt(studentDescription, taskType) {
-  // Extract key information from the description to create a visual
-  const taskTypeMap = {
-    'table': 'data table with rows and columns',
-    'line-graph': 'line graph showing trends over time',
-    'bar-chart': 'bar chart comparing different categories',
-    'pie-chart': 'pie chart showing proportions and percentages',
-    'flowchart': 'flowchart or process diagram with steps',
-    'maps': 'map showing geographical information or changes'
+// Simplified image prompt that avoids DALL-E content policy issues
+function createImagePrompt(taskType) {
+  const prompts = {
+    'table': 'A clean, minimalist data table design in educational style. Simple grid layout with 3-4 rows and 3-4 columns, showing abstract data visualization. White background, thin gray lines, professional appearance like IELTS exam materials. No specific text or numbers, just the table structure with neutral blue header.',
+    
+    'line-graph': 'A simple line graph with 2-3 colored lines showing different trends over time. Clean white background, gray gridlines, axis lines visible. Lines show various patterns: one increasing, one decreasing, one stable. Minimalist design suitable for educational materials. Professional data visualization style.',
+    
+    'bar-chart': 'A clean bar chart with 3-4 groups of bars in neutral colors (blue, gray, green). White background with subtle gridlines. Bars of varying heights showing comparison data. Minimalist, professional style suitable for IELTS exam visuals. Simple and clear design.',
+    
+    'pie-chart': 'A simple pie chart divided into 4-5 segments in neutral colors (blue, green, gray, teal). Clean white background, thin border lines. Professional educational style. Segments of different sizes showing proportion data. Minimalist design suitable for exam materials.',
+    
+    'flowchart': 'A simple process flowchart with 4-6 rectangular boxes connected by arrows. Clean white background, boxes in light blue. Arrows showing flow direction. Minimalist professional style suitable for educational diagrams. Clear visual hierarchy.',
+    
+    'maps': 'Two simple maps side by side showing geographical comparison. Clean white background, minimal colors (light blue, green, gray). Simple shapes representing regions or areas. Professional educational style suitable for exam materials. Abstract geographic visualization.'
   };
 
-  const visualType = taskTypeMap[taskType] || 'chart or graph';
-
-  // Create a prompt that will generate a similar visual based on the description
-  const prompt = `Create a clean, professional ${visualType} that represents the following data description. 
-Make it look like an IELTS Task 1 visual with clear labels, title, and appropriate formatting. Use simple, clear design.
-
-Based on this description: ${studentDescription.substring(0, 800)}
-
-Style: Clean, professional, educational chart/graph suitable for IELTS exam. Include axis labels, title, and legend if needed.`;
-
-  return prompt;
+  return prompts[taskType] || prompts['line-graph'];
 }
