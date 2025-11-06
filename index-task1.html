@@ -399,42 +399,58 @@
         // API endpoint - UPDATE THIS to your Netlify URL
         const API_BASE = 'https://ubiquitous-malasada.netlify.app/.netlify/functions';
 
-        // Load available images when category changes
-        categorySelect.addEventListener('change', async () => {
-          const category = categorySelect.value;
-          if (!category) {
-            imageSelectorContainer.style.display = 'none';
-            return;
-          }
+// Load available images when category changes
+categorySelect.addEventListener('change', async () => {
+  const category = categorySelect.value;
+  if (!category) {
+    imageSelectorContainer.style.display = 'none';
+    return;
+  }
 
-          currentCategory = category;
-          imageSelect.innerHTML = '<option value="">-- Loading images... --</option>';
-          imageSelectorContainer.style.display = 'block';
+  currentCategory = category;
+  imageSelect.innerHTML = '<option value="">-- Loading images from GitHub... --</option>';
+  imageSelectorContainer.style.display = 'block';
 
-          try {
-            const response = await fetch(`${API_BASE}/dropbox-images?category=${category}`);
-            const data = await response.json();
-            
-            if (data.error) {
-              imageSelect.innerHTML = '<option value="">-- Error loading images --</option>';
-              showError('Failed to load images from Dropbox. Please check your setup.');
-              return;
-            }
+  try {
+    // 1️⃣ Define your GitHub repo and folder path
+    const owner = "Gleb-A-Lantsman";
+    const repo = "IELTSTask1Checker";
+    const visualsPath = `visuals/${category}`;
+    const githubApiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${visualsPath}`;
 
-            availableImages[category] = data.images;
-            
-            if (data.images.length === 0) {
-              imageSelect.innerHTML = '<option value="">-- No images found --</option>';
-              return;
-            }
+    // 2️⃣ Fetch list of image files from GitHub
+    const response = await fetch(githubApiUrl);
+    if (!response.ok) throw new Error(`GitHub fetch failed: ${response.status}`);
+    const files = await response.json();
 
-            imageSelect.innerHTML = '<option value="">-- Choose an image --</option>';
-            data.images.forEach((img, index) => {
-              const option = document.createElement('option');
-              option.value = index;
-              option.textContent = img.name;
-              imageSelect.appendChild(option);
-            });
+    // 3️⃣ Filter valid image files
+    const imageFiles = files.filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f.name));
+
+    if (imageFiles.length === 0) {
+      imageSelect.innerHTML = '<option value="">-- No images found in this category --</option>';
+      return;
+    }
+
+    // 4️⃣ Save locally
+    availableImages[category] = imageFiles;
+
+    // 5️⃣ Populate dropdown with file names
+    imageSelect.innerHTML = '<option value="">-- Choose an image --</option>';
+    imageFiles.forEach((img, index) => {
+      const option = document.createElement('option');
+      option.value = index;
+      option.textContent = img.name;
+      imageSelect.appendChild(option);
+    });
+
+    imageSelectorContainer.style.display = 'block';
+  } catch (error) {
+    console.error('Error fetching from GitHub:', error);
+    imageSelect.innerHTML = '<option value="">-- Error loading images --</option>';
+    showError('⚠️ Failed to fetch images from GitHub repository.');
+  }
+});
+
           } catch (error) {
             console.error('Error fetching images:', error);
             imageSelect.innerHTML = '<option value="">-- Error loading images --</option>';
@@ -454,23 +470,25 @@
         });
 
         // Load random image
-        randomImageBtn.addEventListener('click', () => {
-          const category = categorySelect.value;
-          if (!category) {
-            alert('Please select a category first');
-            return;
-          }
+randomImageBtn.addEventListener('click', () => {
+  const category = categorySelect.value;
+  if (!category) {
+    alert('Please select a category first');
+    return;
+  }
 
-          if (!availableImages[category] || availableImages[category].length === 0) {
-            alert('No images available for this category. Please wait for images to load.');
-            return;
-          }
+  const images = availableImages[category];
+  if (!images || images.length === 0) {
+    alert('No images loaded for this category yet.');
+    return;
+  }
 
-          const randomIndex = Math.floor(Math.random() * availableImages[category].length);
-          const image = availableImages[category][randomIndex];
-          imageSelect.value = randomIndex;
-          loadImage(image.url);
-        });
+  const randomIndex = Math.floor(Math.random() * images.length);
+  const image = images[randomIndex];
+  imageSelect.value = randomIndex;
+  loadImage(image.download_url);
+});
+
 
         function loadImage(url) {
           currentImageUrl = url;
