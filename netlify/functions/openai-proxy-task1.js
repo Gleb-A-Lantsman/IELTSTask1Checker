@@ -1,91 +1,57 @@
-const axios = require("axios");
-const fs = require("fs");
-const path = require("path");
+import axios from "axios";
 
-exports.handler = async function (event) {
-  const headers = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Content-Type": "application/json",
-  };
-
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 200, headers };
-  }
-
+export const handler = async (event) => {
   try {
-    const { content, requestType, taskType } = JSON.parse(event.body || "{}");
+    const { content, requestType, taskType, imageUrl } = JSON.parse(event.body || "{}");
 
-    // === Branch 1: Table → ASCII table only ===
-    if (taskType === "table") {
-      const asciiPrompt = `
-You are an IELTS Task 1 helper.
-The student's description below refers to a TABLE.
-Recreate it as a neat ASCII table (plain text, no markdown).
-Do not explain — only output the table itself.
-
-Student's description:
-"""
-${content}
-"""`;
-
-      const response = await axios.post(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          model: "gpt-4o-mini",
-          messages: [
-            { role: "system", content: "Output only ASCII tables." },
-            { role: "user", content: asciiPrompt },
-          ],
-          max_tokens: 500,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      const asciiTable = response.data.choices[0].message.content.trim();
-
+    if (!content || !requestType) {
+      console.error("❌ Missing required fields", { contentLength: content?.length, requestType });
       return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({ asciiTable }),
+        statusCode: 400,
+        body: JSON.stringify({ error: true, feedback: "Missing required data." }),
       };
     }
 
-    // === Branch 2: Other visuals → Python-based processing ===
-    const pythonPrompt = `
-You are a Python data visualization assistant.
-Your task: read the student's IELTS Task 1 description below, identify what kind of chart it describes (line graph, bar chart, pie chart, etc.), then write a Python script that recreates a simple version of the described data visualization.
+    console.log(`📩 Request received: ${requestType} | ${taskType}`);
 
-Rules:
-- Use well-known libraries: pandas and matplotlib.
-- You may create synthetic example data consistent with the student's description (approximate values are fine).
-- Plot clearly labelled axes and use 2D flat design.
-- Save the chart to a file named "chart.png".
-- Output only the Python code, nothing else.
+    // -------------------------------
+    // ✳️ STEP 1: Choose request mode
+    // -------------------------------
+    let prompt = "";
+    let image_prompt = "";
+    let asciiTable = null;
+    let generatedImageBase64 = null;
+    let generatedImageUrl = null;
+
+    if (requestType === "help") {
+      prompt = `You are an IELTS examiner.
+Give short writing hints (under 150 words) for this Task 1 description:\n\n${content}\n\nReturn quick, clear advice.`;
+    } else if (requestType === "full-feedback") {
+      prompt = `You are an IELTS Writing Task 1 examiner.
+Evaluate the student's description based on Task Achievement, Coherence and Cohesion, Lexical Resource, and Grammatical Range and Accuracy.
+Provide specific feedback for each criterion in markdown format with bold section titles.
 
 Student's description:
-"""
-${content}
-"""`;
+${content}`;
+    } else {
+      console.warn("⚠️ Unsupported requestType", requestType);
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: true, feedback: "Unsupported requestType." }),
+      };
+    }
 
-    const codeResponse = await axios.post(
+    // -------------------------------
+    // ✳️ STEP 2: Generate textual feedback via ChatGPT
+    // -------------------------------
+    const feedbackResponse = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
-        model: "gpt-4o",
+        model: "gpt-4o-mini",
         messages: [
-          {
-            role: "system",
-            content:
-              "You output only executable Python scripts that use pandas and matplotlib.",
-          },
-          { role: "user", content: pythonPrompt },
+          { role: "system", content: "You are an IELTS Writing Task 1 examiner." },
+          { role: "user", content: prompt },
         ],
-        max_tokens: 800,
       },
       {
         headers: {
@@ -95,46 +61,83 @@ ${content}
       }
     );
 
-    const pythonCode = codeResponse.data.choices[0].message.content;
+    const feedback = feedbackResponse.data.choices[0].message.content.trim();
+    console.log("✅ Feedback generated, length:", feedback.length);
 
-    // === Run Python code locally ===
-    const tmpFile = path.join("/tmp", `chart_${Date.now()}.py`);
-    fs.writeFileSync(tmpFile, pythonCode);
+    // -------------------------------
+    // ✳️ STEP 3: Visualization logic
+    // -------------------------------
+    if (requestType === "full-feedback") {
+      if (taskType === "table") {
+        console.log("📊 Table detected → ASCII generation");
 
-    const { spawnSync } = require("child_process");
-    const result = spawnSync("python3", [tmpFile], { encoding: "utf8" });
+        // Generate ASCII table
+        const asciiResponse = await axios.post(
+          "https://api.openai.com/v1/chat/completions",
+          {
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: "You are a data formatter that converts descriptions into ASCII tables." },
+              { role: "user", content: `Convert this Task 1 description into an ASCII table only:\n\n${content}` },
+            ],
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
 
-    const chartPath = path.join("/tmp", "chart.png");
-    if (fs.existsSync(chartPath)) {
-      const imgData = fs.readFileSync(chartPath).toString("base64");
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({
-          feedback: "Python chart generated successfully.",
-          pythonCode,
-          generatedImageBase64: `data:image/png;base64,${imgData}`,
-        }),
-      };
-    } else {
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({
-          error: true,
-          feedback:
-            "Python did not produce an image. Output:\n" + result.stderr,
-          pythonCode,
-        }),
-      };
+        asciiTable = asciiResponse.data.choices[0].message.content.trim();
+        console.log("✅ ASCII table generated");
+      } else {
+        console.log("📈 Non-table task → Python visualization or image");
+
+        image_prompt = `Generate a clear visualization (chart, map, or diagram) that corresponds to this IELTS Task 1 description:\n${content}`;
+
+        const imageResponse = await axios.post(
+          "https://api.openai.com/v1/images/generations",
+          {
+            model: "gpt-image-1",
+            prompt: image_prompt,
+            size: "1024x1024",
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        generatedImageUrl = imageResponse.data.data[0].url;
+        console.log("✅ DALL·E image generated");
+      }
     }
+
+    // -------------------------------
+    // ✳️ STEP 4: Respond
+    // -------------------------------
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        feedback,
+        asciiTable,
+        generatedImageBase64,
+        generatedImageUrl,
+      }),
+    };
   } catch (error) {
-    console.error("Error:", error);
-    const msg = error.response?.data?.error?.message || error.message;
+    console.error("❌ ERROR inside function:", error.message || error);
+    if (error.response?.data) console.error("OpenAI response:", JSON.stringify(error.response.data, null, 2));
+
     return {
       statusCode: 500,
-      headers,
-      body: JSON.stringify({ error: true, feedback: msg }),
+      body: JSON.stringify({
+        error: true,
+        feedback: `Internal server error: ${error.message || "Unknown"}`,
+      }),
     };
   }
 };
