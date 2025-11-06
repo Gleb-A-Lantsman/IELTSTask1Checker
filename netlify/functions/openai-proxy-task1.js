@@ -145,21 +145,21 @@ async function visualizeDescription(content) {
   const axios = require("axios");
   try {
     const prompt = `
-Read the student's written description and determine what kind of IELTS Task 1 visual it refers to (table, line graph, bar chart, pie chart, map, or process). 
-Then, draw that type of visual in a clean, minimal academic style.
+Render a neutral technical diagram that visually represents the student's description below.
 
-Rules for rendering:
-• Plain 2-D layout on white background.
-• No text, numbers, flags, icons, or people.
-• Only thin grey gridlines and 2–4 muted colours.
-• If it describes a table → draw a simple grid table (rows + columns).
-• If it describes a line graph → draw 2–4 coloured lines with an x- and y-axis.
-• If it describes a bar chart → draw grouped vertical bars.
-• If it describes a pie chart → draw a circle divided into coloured slices.
-• If it describes a map → draw two simple outline maps side-by-side.
-• If it describes a process → draw 4–6 rectangles connected by arrows.
+Style guide:
+• White background, 2-D flat layout.
+• Use thin grey lines for borders or axes.
+• Only rectangles, straight lines, or filled bars — NO icons, people, flags, shading, patterns, or text.
+• Never include numbers or symbols (% etc.).
+• If description mentions “table”, “columns”, or “rows”, draw a simple rectangular grid with a few cells.
+• If it mentions “chart”, “graph”, or “trend”, draw 2–4 plain bars or lines.
+• If it mentions “map”, draw two plain outline shapes side-by-side.
+• Use 2–3 muted colours (light blue / grey tones only).
 
-Student’s description:
+Goal: make it look like a blank IELTS-style exam visual, not artwork.
+
+Student description:
 """
 ${content}
 """`;
@@ -171,7 +171,8 @@ ${content}
         prompt,
         n: 1,
         size: "1024x1024",
-        quality: "standard"
+        quality: "standard",
+        style: "natural" // natural suppresses surreal/illustrative
       },
       {
         headers: {
@@ -184,10 +185,8 @@ ${content}
 
     return response.data.data[0].url;
   } catch (error) {
-    console.error(
-      "Error generating visualization:",
-      error.response?.data || error.message
-    );
+    console.error("Error generating visualization:", error.response?.data || error.message);
     return null;
   }
 }
+
