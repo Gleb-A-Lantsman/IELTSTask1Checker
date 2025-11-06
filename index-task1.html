@@ -593,29 +593,71 @@
         }
 
         function displayFullFeedback(data) {
-          // Display text feedback
-          feedbackContainer.innerHTML = formatFullFeedback(data.feedback);
+  // Display text feedback
+  feedbackContainer.innerHTML = formatFullFeedback(data.feedback);
 
-          // Display visual comparison if available
-          if (data.generatedImageUrl) {
-            comparisonContainer.style.display = 'block';
-            comparisonContainer.innerHTML = `
-              <div class="comparison-container">
-                <div class="comparison-side">
-                  <h5>📊 Original Task Image</h5>
-                  <img src="${currentImageUrl}" alt="Original task image">
-                </div>
-                <div class="comparison-side">
-                  <h5>🤖 AI Visualization of Your Description</h5>
-                  <img src="${data.generatedImageUrl}" alt="Generated image from description">
-                  <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
-                    This image shows what your description conveys. Compare it with the original!
-                  </p>
-                </div>
-              </div>
-            `;
-          }
-        }
+  // Reset comparison area
+  comparisonContainer.innerHTML = "";
+  comparisonContainer.style.display = "block";
+
+  // --- NEW HANDLING LOGIC ---
+
+  // Case 1: ASCII table (for table-type tasks)
+  if (data.asciiTable) {
+    comparisonContainer.innerHTML = `
+      <div class="comparison-container">
+        <div class="comparison-side">
+          <h5>📊 Original Task Image</h5>
+          <img src="${currentImageUrl}" alt="Original task image">
+        </div>
+        <div class="comparison-side">
+          <h5>🧮 AI ASCII Table from Your Description</h5>
+          <pre style="background:#fafafa; padding:15px; border-radius:4px; border:1px solid #ddd; font-family:monospace; overflow-x:auto;">
+${data.asciiTable}
+          </pre>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  // Case 2: Python-generated base64 chart
+  if (data.generatedImageBase64) {
+    comparisonContainer.innerHTML = `
+      <div class="comparison-container">
+        <div class="comparison-side">
+          <h5>📊 Original Task Image</h5>
+          <img src="${currentImageUrl}" alt="Original task image">
+        </div>
+        <div class="comparison-side">
+          <h5>🐍 Python Visualization of Your Description</h5>
+          <img src="${data.generatedImageBase64}" alt="Generated Python chart">
+          <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
+            Chart generated using Python (Matplotlib + Pandas) based on your description.
+          </p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  // Case 3: Fallback to DALL-E style image (legacy)
+  if (data.generatedImageUrl) {
+    comparisonContainer.innerHTML = `
+      <div class="comparison-container">
+        <div class="comparison-side">
+          <h5>📊 Original Task Image</h5>
+          <img src="${currentImageUrl}" alt="Original task image">
+        </div>
+        <div class="comparison-side">
+          <h5>🤖 AI Visualization of Your Description</h5>
+          <img src="${data.generatedImageUrl}" alt="Generated image from description">
+        </div>
+      </div>
+    `;
+  }
+}
+
 
         function formatFullFeedback(fb) {
           const text = fb.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
