@@ -39,7 +39,7 @@ exports.handler = async function(event, context) {
         headers,
         body: JSON.stringify({ 
           error: true, 
-          message: 'Dropbox not configured' 
+          message: 'Dropbox not configured. Please add DROPBOX_ACCESS_TOKEN to environment variables.' 
         })
       };
     }
@@ -62,20 +62,48 @@ exports.handler = async function(event, context) {
         headers,
         body: JSON.stringify({ 
           error: true, 
-          message: 'Invalid category' 
+          message: `Invalid category: ${category}. Valid options: ${Object.keys(folderPaths).join(', ')}` 
         })
       };
     }
 
+    console.log(`Attempting to list files in: ${folderPath}`);
+
     // List files in Dropbox folder
-    const listResponse = await dropboxApiRequest(
-      'https://api.dropboxapi.com/2/files/list_folder',
-      DROPBOX_ACCESS_TOKEN,
-      {
-        path: folderPath,
-        limit: 100
+    let listResponse;
+    try {
+      listResponse = await dropboxApiRequest(
+        'https://api.dropboxapi.com/2/files/list_folder',
+        DROPBOX_ACCESS_TOKEN,
+        {
+          path: folderPath,
+          limit: 100
+        }
+      );
+    } catch (error) {
+      console.error(`Error listing folder ${folderPath}:`, error.message);
+      
+      if (error.message.includes('path/not_found') || error.message.includes('not_found')) {
+        return {
+          statusCode: 404,
+          headers,
+          body: JSON.stringify({ 
+            error: true, 
+            message: `Folder "${folderPath}" not found in Dropbox. Please create it in your Dropbox root.`,
+            folderPath: folderPath
+          })
+        };
       }
-    );
+      
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ 
+          error: true, 
+          message: `Failed to access Dropbox folder: ${error.message}` 
+        })
+      };
+    }
 
     // Filter for image files only
     const imageFiles = listResponse.entries.filter(entry => {
@@ -85,50 +113,109 @@ exports.handler = async function(event, context) {
               name.endsWith('.png') || name.endsWith('.gif'));
     });
 
+    console.log(`Found ${imageFiles.length} image file(s) in ${folderPath}`);
+
+    if (imageFiles.length === 0) {
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ 
+          category,
+          images: [],
+          count: 0,
+          message: `No images found in ${folderPath}. Please upload .jpg, .png, or .gif files.`
+        })
+      };
+    }
+
     // Get shared links for each image
     const images = [];
     
     for (const file of imageFiles) {
       try {
-        // Try to get existing shared link
-        const sharedLinkResponse = await dropboxApiRequest(
-          'https://api.dropboxapi.com/2/sharing/list_shared_links',
-          DROPBOX_ACCESS_TOKEN,
-          {
-            path: file.path_lower,
-            direct_only: true
-          }
-        );
-
         let url;
-        if (sharedLinkResponse.links && sharedLinkResponse.links.length > 0) {
-          // Use existing shared link
-          url = sharedLinkResponse.links[0].url.replace('www.dropbox.com', 'dl.dropboxusercontent.com').replace('?dl=0', '');
-        } else {
-          // Create new shared link
-          const createLinkResponse = await dropboxApiRequest(
-            'https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings',
+        
+        // Try to get existing shared link first
+        try {
+          const sharedLinkResponse = await dropboxApiRequest(
+            'https://api.dropboxapi.com/2/sharing/list_shared_links',
             DROPBOX_ACCESS_TOKEN,
             {
               path: file.path_lower,
-              settings: {
-                requested_visibility: 'public'
-              }
+              direct_only: true
             }
           );
-          url = createLinkResponse.url.replace('www.dropbox.com', 'dl.dropboxusercontent.com').replace('?dl=0', '');
+
+          if (sharedLinkResponse.links && sharedLinkResponse.links.length > 0) {
+            // Use existing shared link
+            url = sharedLinkResponse.links[0].url.replace('www.dropbox.com', 'dl.dropboxusercontent.com').replace('?dl=0', '');
+            console.log(`Using existing link for ${file.name}`);
+          }
+        } catch (linkError) {
+          // No existing link, will create one
+          console.log(`No existing link for ${file.name}, creating new one`);
         }
 
-        images.push({
-          name: file.name,
-          url: url,
-          path: file.path_lower
-        });
+        // If no existing link, create one
+        if (!url) {
+          try {
+            const createLinkResponse = await dropboxApiRequest(
+              'https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings',
+              DROPBOX_ACCESS_TOKEN,
+              {
+                path: file.path_lower,
+                settings: {
+                  requested_visibility: 'public'
+                }
+              }
+            );
+            url = createLinkResponse.url.replace('www.dropbox.com', 'dl.dropboxusercontent.com').replace('?dl=0', '');
+            console.log(`Created new link for ${file.name}`);
+          } catch (createError) {
+            // If link already exists, try to get it again
+            if (createError.message.includes('shared_link_already_exists')) {
+              const sharedLinkResponse = await dropboxApiRequest(
+                'https://api.dropboxapi.com/2/sharing/list_shared_links',
+                DROPBOX_ACCESS_TOKEN,
+                {
+                  path: file.path_lower,
+                  direct_only: false
+                }
+              );
+              if (sharedLinkResponse.links && sharedLinkResponse.links.length > 0) {
+                url = sharedLinkResponse.links[0].url.replace('www.dropbox.com', 'dl.dropboxusercontent.com').replace('?dl=0', '');
+              }
+            } else {
+              throw createError;
+            }
+          }
+        }
+
+        if (url) {
+          images.push({
+            name: file.name,
+            url: url,
+            path: file.path_lower
+          });
+        }
       } catch (error) {
-        console.error(`Error getting shared link for ${file.name}:`, error.message);
+        console.error(`Error processing ${file.name}:`, error.message);
         // Continue with other files even if one fails
       }
     }
+
+    if (images.length === 0 && imageFiles.length > 0) {
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ 
+          error: true, 
+          message: 'Found images but failed to create shared links. Check Dropbox token permissions (sharing.write and sharing.read required).' 
+        })
+      };
+    }
+
+    console.log(`Successfully processed ${images.length} image(s)`);
 
     return {
       statusCode: 200,
@@ -141,13 +228,13 @@ exports.handler = async function(event, context) {
     };
 
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Unexpected error:', error);
     return {
       statusCode: 500,
       headers,
       body: JSON.stringify({ 
         error: true, 
-        message: error.message || 'Failed to fetch images from Dropbox'
+        message: `Server error: ${error.message}. Check function logs for details.`
       })
     };
   }
@@ -181,10 +268,11 @@ function dropboxApiRequest(url, token, data) {
           if (res.statusCode >= 200 && res.statusCode < 300) {
             resolve(parsedData);
           } else {
-            reject(new Error(parsedData.error_summary || `HTTP ${res.statusCode}`));
+            const errorMsg = parsedData.error_summary || parsedData.error?.message || `HTTP ${res.statusCode}`;
+            reject(new Error(errorMsg));
           }
         } catch (error) {
-          reject(new Error('Failed to parse Dropbox response'));
+          reject(new Error(`Failed to parse Dropbox response: ${responseData.substring(0, 100)}`));
         }
       });
     });
