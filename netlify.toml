@@ -4,7 +4,3 @@
 
 [functions]
   directory = "netlify/functions"
-
-[[functions]]
-  name = "python-viz"
-  runtime = "python3.8"
