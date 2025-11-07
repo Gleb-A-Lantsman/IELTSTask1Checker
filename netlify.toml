@@ -1,8 +1,11 @@
 [build]
-  functions = "netlify/functions"
+  command = "echo 'Build complete'"
   publish = "."
 
-[[redirects]]
-  from = "/*"
-  to = "/index-task1.html"
-  status = 200
+[functions]
+  directory = "netlify/functions"
+
+# Python runtime support
+[[functions]]
+  name = "python-viz"
+  runtime = "python3.8"
