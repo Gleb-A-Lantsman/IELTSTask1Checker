@@ -1,9 +1,9 @@
 // E2B Code Interpreter SDK version
 // Install first: npm install @e2b/code-interpreter
 
-import { CodeInterpreter } from '@e2b/code-interpreter';
+const { CodeInterpreter } = require('@e2b/code-interpreter');
 
-export const handler = async (event) => {
+exports.handler = async (event) => {
   try {
     const { content, requestType, taskType, imageUrl } = JSON.parse(event.body || "{}");
 
