@@ -1,7 +1,4 @@
-// E2B Code Interpreter SDK version
-// Install first: npm install @e2b/code-interpreter
-
-const { CodeInterpreter } = require('@e2b/code-interpreter');
+// E2B Code Interpreter with dynamic import for Netlify
 
 exports.handler = async (event) => {
   try {
@@ -124,7 +121,9 @@ plt.show()`;
         console.log("✅ Python code generated:", pythonCode.substring(0, 150));
 
         try {
-          // Execute using E2B Code Interpreter SDK
+          // Dynamic import for ES module
+          const { CodeInterpreter } = await import('@e2b/code-interpreter');
+          
           const sandbox = await CodeInterpreter.create({
             apiKey: process.env.E2B_API_KEY,
           });
@@ -139,7 +138,6 @@ plt.show()`;
           if (execution.results && execution.results.length > 0) {
             for (const result of execution.results) {
               if (result.png) {
-                // E2B returns base64 PNG directly
                 generatedImageBase64 = `data:image/png;base64,${result.png}`;
                 console.log("✅ Chart image extracted");
                 break;
