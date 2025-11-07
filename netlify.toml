@@ -2,7 +2,7 @@
   publish = "."
 
 [functions]
-  directory = "netlify/python-viz"
+  directory = "netlify/functions"
 
 [[redirects]]
   from = "/"
