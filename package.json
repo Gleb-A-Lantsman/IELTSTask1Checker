@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "IELTS Task 1 feedback tool with Dropbox integration and AI image generation",
   "dependencies": {
-    "axios": "^1.6.0",
-    "@e2b/code-interpreter": "^1.0.2"
+    "axios": "^1.6.0"
   }
 }
