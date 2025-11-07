@@ -73,43 +73,52 @@ export const handler = async (event) => {
 TASK: ${taskType}
 DATA: ${content}
 
-Requirements:
-- Extract ALL numbers and categories from description
-- Create ${taskType} matching the data exactly
-- Professional style: white background, grid, clear labels
-- Save as PNG to BytesIO and return base64
+CRITICAL REQUIREMENTS:
+1. Extract ALL numbers, categories, and labels from the description
+2. Create ${taskType} that matches the data EXACTLY
+3. Use professional styling: white background, grid, clear labels, legend
+4. Output base64 between markers: BASE64_START and BASE64_END
+5. NO explanations, NO comments outside code, ONLY executable Python
 
-Template structure:
+EXACT template to follow:
 \`\`\`python
 import matplotlib.pyplot as plt
 import pandas as pd
 import io
 import base64
+import sys
 
-# Parse data from description
-# [Your data extraction here]
+# Parse data from description above
+# Example: data = {'Year': [1988, 2000, 2030], 'Germany': [20, 21, 30], ...}
 
 # Create figure
 fig, ax = plt.subplots(figsize=(10, 6))
-# [Your chart code here]
+
+# Create your chart here (line plot, bar chart, etc.)
+# Example for line graph:
+# for country in countries:
+#     ax.plot(years, values[country], marker='o', label=country)
 
 # Styling
-ax.grid(True, alpha=0.3)
-ax.set_xlabel('...')
-ax.set_ylabel('...')
-ax.set_title('...')
+ax.grid(True, alpha=0.3, linestyle='--')
+ax.set_xlabel('X Label', fontsize=11)
+ax.set_ylabel('Y Label', fontsize=11)
+ax.set_title('Chart Title', fontsize=13, fontweight='bold')
+ax.legend(loc='best')
 plt.tight_layout()
 
-# Export
+# Export - DO NOT MODIFY THIS SECTION
 buf = io.BytesIO()
 plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
 buf.seek(0)
 img_b64 = base64.b64encode(buf.read()).decode('utf-8')
-print(f"BASE64_START{img_b64}BASE64_END")
+sys.stdout.write(f"BASE64_START{img_b64}BASE64_END")
+sys.stdout.flush()
 plt.close()
 \`\`\`
 
-Return ONLY executable Python code, no explanations.`;
+CRITICAL: Use sys.stdout.write() NOT print() for the base64 output.
+Return ONLY the Python code, no markdown, no explanations.`;
 
         const codeRes = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
@@ -130,13 +139,29 @@ Return ONLY executable Python code, no explanations.`;
         const codeData = await codeRes.json();
         let pythonCode = codeData.choices?.[0]?.message?.content?.trim() || "";
         
-        // Clean code
+        // Clean code - remove markdown and explanations
         pythonCode = pythonCode
           .replace(/```python\n?/g, '')
           .replace(/```\n?/g, '')
+          .replace(/^#.*$/gm, '')  // Remove comment-only lines
           .trim();
 
-        console.log("✅ Python code generated, executing...");
+        // Validate code has required components
+        if (!pythonCode.includes('BASE64_START') || !pythonCode.includes('BASE64_END')) {
+          console.error("Generated code missing BASE64 markers!");
+          pythonCode += `\n
+# Fallback base64 output
+buf = io.BytesIO()
+plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
+buf.seek(0)
+img_b64 = base64.b64encode(buf.read()).decode('utf-8')
+sys.stdout.write(f"BASE64_START{img_b64}BASE64_END")
+sys.stdout.flush()
+plt.close()
+`;
+        }
+
+        console.log("✅ Python code generated:", pythonCode.substring(0, 200));
 
         try {
           // Execute Python code
@@ -211,11 +236,17 @@ async function executePython(code) {
       },
       body: JSON.stringify({
         command: "python3",
-        args: ["-c", code],
+        args: ["-u", "-c", code],  // -u for unbuffered output
       }),
     });
 
     const result = await execRes.json();
+    
+    console.log("E2B execution result:", {
+      stdout: result.stdout?.substring(0, 100),
+      stderr: result.stderr?.substring(0, 200),
+      exitCode: result.exitCode
+    });
 
     // Clean up sandbox
     await fetch(`https://api.e2b.dev/sandboxes/${sandboxId}`, {
@@ -223,15 +254,23 @@ async function executePython(code) {
       headers: { "X-API-Key": E2B_API_KEY },
     });
 
+    // Check for errors first
+    if (result.exitCode !== 0) {
+      throw new Error(`Python execution failed: ${result.stderr || 'Unknown error'}`);
+    }
+
     // Extract base64 from output
-    const output = result.stdout || result.stderr || "";
+    const output = result.stdout || "";
     const match = output.match(/BASE64_START([A-Za-z0-9+/=]+)BASE64_END/);
     
     if (match && match[1]) {
+      console.log("✅ Base64 extracted, length:", match[1].length);
       return match[1];
     }
 
-    throw new Error("No base64 output found");
+    // If no match, log what we got
+    console.error("Failed to extract base64. Output:", output.substring(0, 500));
+    throw new Error(`No base64 output found. Got: ${output.substring(0, 100)}`);
 
   } catch (error) {
     console.error("E2B execution error:", error);
