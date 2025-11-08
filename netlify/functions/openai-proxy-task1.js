@@ -1,6 +1,4 @@
-// E2B Code Interpreter for matplotlib charts
-
-const { CodeInterpreter } = require('@e2b/code-interpreter');
+const { Sandbox } = require('@e2b/code-interpreter');
 
 exports.handler = async (event) => {
   try {
@@ -82,13 +80,11 @@ Requirements:
 - Use matplotlib.pyplot as plt and pandas as pd
 - Include: title, labels, legend, grid
 - Style: white background, clear fonts, figsize=(10,6)
-- CRITICAL: Save plot to buffer, NOT to file
 - Return ONLY executable Python code, no explanations
 
 Example structure:
 import matplotlib.pyplot as plt
 import pandas as pd
-import io
 
 # Extract data from description
 data = {...}
@@ -105,9 +101,7 @@ ax.set_xlabel('...')
 ax.set_ylabel('...')
 ax.set_title('...')
 ax.legend()
-plt.tight_layout()
-
-# DO NOT include plt.show() - E2B will capture the plot automatically`;
+plt.tight_layout()`;
 
         const codeRes = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
@@ -138,16 +132,18 @@ plt.tight_layout()
         console.log("✅ Python code generated:", pythonCode.substring(0, 150));
 
         try {
-          // Execute Python code in E2B sandbox
-          const sandbox = await CodeInterpreter.create({
+          // Create E2B sandbox
+          const sandbox = await Sandbox.create({
             apiKey: process.env.E2B_API_KEY,
-            timeoutMs: 30000 // 30 second timeout
+            timeoutMs: 30000
           });
 
           console.log("📦 E2B sandbox created");
 
-          // Execute the matplotlib code
+          // Execute Python code
           const execution = await sandbox.notebook.execCell(pythonCode);
+
+          console.log("🔍 Execution result:", JSON.stringify(execution, null, 2).substring(0, 200));
 
           // Check for errors
           if (execution.error) {
@@ -155,43 +151,54 @@ plt.tight_layout()
             throw new Error(execution.error.value || "Python execution failed");
           }
 
-          // Get the plot image from results
+          // Get plot from results
           if (execution.results && execution.results.length > 0) {
             for (const result of execution.results) {
+              console.log("📊 Result type:", result.formats());
+              
               if (result.png) {
                 generatedImageBase64 = `data:image/png;base64,${result.png}`;
-                console.log("✅ E2B matplotlib chart generated successfully");
+                console.log("✅ E2B chart generated from result.png");
                 break;
               }
             }
           }
 
+          // If no image found, try to get current matplotlib figure
           if (!generatedImageBase64) {
-            console.log("⚠️ No image in results, checking for matplotlib figure");
-            // Sometimes matplotlib doesn't auto-display, try to save explicitly
-            const saveCode = `
+            console.log("⚠️ No image in results, trying to get matplotlib figure");
+            
+            const figureCode = `
 import matplotlib.pyplot as plt
 import io
 import base64
 
-buf = io.BytesIO()
-plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-buf.seek(0)
-img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-print(img_base64)
-plt.close('all')
+# Get current figure
+fig = plt.gcf()
+if fig.get_axes():
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+    buf.seek(0)
+    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+    buf.close()
+    plt.close('all')
+    print(img_base64)
+else:
+    print("NO_FIGURE")
 `;
-            const saveExec = await sandbox.notebook.execCell(saveCode);
-            if (saveExec.logs && saveExec.logs.stdout && saveExec.logs.stdout.length > 0) {
-              const base64Data = saveExec.logs.stdout.join('').trim();
-              if (base64Data) {
-                generatedImageBase64 = `data:image/png;base64,${base64Data}`;
-                console.log("✅ Chart extracted via explicit save");
+
+            const figExec = await sandbox.notebook.execCell(figureCode);
+            
+            if (figExec.logs && figExec.logs.stdout && figExec.logs.stdout.length > 0) {
+              const output = figExec.logs.stdout.join('').trim();
+              if (output && output !== "NO_FIGURE") {
+                generatedImageBase64 = `data:image/png;base64,${output}`;
+                console.log("✅ Chart extracted via matplotlib.gcf()");
               }
             }
           }
 
-          // Close sandbox to free resources
+          // Close sandbox
           await sandbox.close();
           console.log("📦 E2B sandbox closed");
 
