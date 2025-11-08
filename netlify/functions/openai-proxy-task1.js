@@ -80,7 +80,8 @@ Requirements:
 - Use matplotlib.pyplot as plt and pandas as pd
 - Include: title, labels, legend, grid
 - Style: white background, clear fonts, figsize=(10,6)
-- Return ONLY executable Python code, no explanations
+- Return ONLY executable Python code, no explanations, no markdown
+- Do NOT include plt.show() - the code will save to buffer automatically
 
 Example structure:
 import matplotlib.pyplot as plt
@@ -112,7 +113,7 @@ plt.tight_layout()`;
           body: JSON.stringify({
             model: "gpt-4o",
             messages: [
-              { role: "system", content: "Generate clean Python matplotlib code. Output only code, no markdown." },
+              { role: "system", content: "Generate clean Python matplotlib code. Output only code, no markdown, no explanations." },
               { role: "user", content: codeGenPrompt },
             ],
             temperature: 0.3,
@@ -122,36 +123,51 @@ plt.tight_layout()`;
         const codeData = await codeRes.json();
         let pythonCode = codeData.choices?.[0]?.message?.content?.trim() || "";
         
-        // Clean code
+        // Clean code more thoroughly
         pythonCode = pythonCode
           .replace(/```python\n?/g, '')
           .replace(/```\n?/g, '')
+          .replace(/plt\.show\(\)/g, '')  // Remove plt.show() calls
           .trim();
 
-        console.log("✅ Python code generated:", pythonCode.substring(0, 150));
+        console.log("✅ Python code generated:", pythonCode.substring(0, 200));
 
         try {
-          // Call Python function
-          const pythonFuncUrl = '/.netlify/functions/python-viz';
+          // Get base URL from the event
+          const protocol = event.headers['x-forwarded-proto'] || 'https';
+          const host = event.headers['host'];
+          const baseUrl = `${protocol}://${host}`;
+          
+          // Call Python function with full URL
+          const pythonFuncUrl = `${baseUrl}/.netlify/functions/python-viz`;
+          console.log(`🔗 Calling Python function at: ${pythonFuncUrl}`);
+          
           const pythonRes = await fetch(pythonFuncUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+              'Content-Type': 'application/json'
+            },
             body: JSON.stringify({ code: pythonCode })
           });
 
+          console.log(`📊 Python function response status: ${pythonRes.status}`);
+
           if (pythonRes.ok) {
             const pythonData = await pythonRes.json();
-            if (pythonData.image) {
+            if (pythonData.success && pythonData.image) {
               generatedImageBase64 = `data:image/png;base64,${pythonData.image}`;
-              console.log("✅ Python matplotlib chart generated");
+              console.log("✅ Python matplotlib chart generated successfully");
+            } else {
+              console.error("Python function returned unsuccessful:", pythonData);
             }
           } else {
-            const errorData = await pythonRes.json();
-            console.error("Python function error:", errorData);
+            const errorText = await pythonRes.text();
+            console.error(`Python function error (${pythonRes.status}):`, errorText);
           }
 
         } catch (pyError) {
           console.error("❌ Python execution failed:", pyError.message);
+          console.error("Stack trace:", pyError.stack);
         }
       }
     }
