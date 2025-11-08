@@ -1,5 +1,5 @@
 [build]
   functions = "netlify/functions"
 
-[[plugins]]
-  package = "@netlify/plugin-python"
+[build.environment]
+  PYTHON_VERSION = "3.9"
