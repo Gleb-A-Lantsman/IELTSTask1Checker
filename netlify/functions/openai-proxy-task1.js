@@ -132,7 +132,7 @@ plt.tight_layout()`;
         console.log("✅ Python code generated:", pythonCode.substring(0, 150));
 
         try {
-          // Create E2B sandbox
+          // Create E2B sandbox using the SIMPLE API
           const sandbox = await Sandbox.create({
             apiKey: process.env.E2B_API_KEY,
             timeoutMs: 30000
@@ -140,10 +140,10 @@ plt.tight_layout()`;
 
           console.log("📦 E2B sandbox created");
 
-          // Execute Python code
-          const execution = await sandbox.notebook.execCell(pythonCode);
+          // Execute Python code using runCode (not notebook.execCell)
+          const execution = await sandbox.runCode(pythonCode);
 
-          console.log("🔍 Execution result:", JSON.stringify(execution, null, 2).substring(0, 200));
+          console.log("🔍 Execution completed");
 
           // Check for errors
           if (execution.error) {
@@ -151,29 +151,29 @@ plt.tight_layout()`;
             throw new Error(execution.error.value || "Python execution failed");
           }
 
-          // Get plot from results
+          // Get results (charts are auto-captured by E2B)
           if (execution.results && execution.results.length > 0) {
             for (const result of execution.results) {
-              console.log("📊 Result type:", result.formats());
+              console.log("📊 Result type:", result.formats ? result.formats() : typeof result);
               
+              // E2B returns base64 PNG in result.png
               if (result.png) {
                 generatedImageBase64 = `data:image/png;base64,${result.png}`;
-                console.log("✅ E2B chart generated from result.png");
+                console.log("✅ E2B chart generated!");
                 break;
               }
             }
           }
 
-          // If no image found, try to get current matplotlib figure
+          // If still no image, matplotlib might need explicit save
           if (!generatedImageBase64) {
-            console.log("⚠️ No image in results, trying to get matplotlib figure");
+            console.log("⚠️ No image found, trying explicit save");
             
-            const figureCode = `
+            const saveCode = `
 import matplotlib.pyplot as plt
 import io
 import base64
 
-# Get current figure
 fig = plt.gcf()
 if fig.get_axes():
     buf = io.BytesIO()
@@ -183,17 +183,15 @@ if fig.get_axes():
     buf.close()
     plt.close('all')
     print(img_base64)
-else:
-    print("NO_FIGURE")
 `;
 
-            const figExec = await sandbox.notebook.execCell(figureCode);
+            const saveExec = await sandbox.runCode(saveCode);
             
-            if (figExec.logs && figExec.logs.stdout && figExec.logs.stdout.length > 0) {
-              const output = figExec.logs.stdout.join('').trim();
-              if (output && output !== "NO_FIGURE") {
+            if (saveExec.logs && saveExec.logs.stdout && saveExec.logs.stdout.length > 0) {
+              const output = saveExec.logs.stdout.join('').trim();
+              if (output && output.length > 100) {
                 generatedImageBase64 = `data:image/png;base64,${output}`;
-                console.log("✅ Chart extracted via matplotlib.gcf()");
+                console.log("✅ Chart extracted via explicit save");
               }
             }
           }
