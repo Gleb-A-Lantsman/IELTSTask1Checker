@@ -1,10 +1,12 @@
 [build]
-  publish = "."
+  functions = "netlify/functions"
+
+[[plugins]]
+  package = "@netlify/plugin-python"
 
 [functions]
-  directory = "netlify/functions"
+  python_version = "3.9"
 
-[[redirects]]
-  from = "/"
-  to = "/index-task1.html"
-  status = 200
+[[functions]]
+  path = "netlify/functions/python-viz"
+  runtime = "python3.9"
