@@ -1,3 +1,5 @@
+// E2B Code Interpreter for matplotlib charts with style matching
+
 const { Sandbox } = require('@e2b/code-interpreter');
 
 exports.handler = async (event) => {
@@ -69,38 +71,63 @@ exports.handler = async (event) => {
       } else {
         console.log(`📈 E2B matplotlib for ${taskType}`);
         
-        // Generate Python code
-        const codeGenPrompt = `Generate Python matplotlib code for ${taskType} from this IELTS description:
+        // Enhanced code generation with vision analysis
+        const codeGenPrompt = `You are analyzing an IELTS Task 1 description and will generate Python matplotlib code that matches the ORIGINAL image style.
 
+DESCRIPTION:
 ${content}
 
-Requirements:
-- Extract ALL data accurately
-- Create professional ${taskType}
-- Use matplotlib.pyplot as plt and pandas as pd
-- Include: title, labels, legend, grid
-- Style: white background, clear fonts, figsize=(10,6)
-- Return ONLY executable Python code, no explanations
+TASK TYPE: ${taskType}
+
+REQUIREMENTS:
+1. Extract ALL data accurately from the description
+2. Match the visual style of the original chart as closely as possible
+3. Use matplotlib.pyplot as plt and pandas as pd
+4. Figure size: figsize=(10, 6)
+5. Professional styling with white background
+
+STYLE MATCHING INSTRUCTIONS:
+- If the description mentions specific colors (blue, orange, green, etc.), use those EXACT colors
+- If colors are mentioned for specific series, match them precisely
+- Match line styles (solid, dashed, dotted) if described
+- Match marker styles (circles, squares, etc.) if mentioned
+- Use the same axis labels and title style as described
+- Include grid if the description mentions it
+- Add legend with proper positioning
+
+COMMON COLOR MAPPINGS:
+- Blue series: '#1f77b4' or 'blue'
+- Orange series: '#ff7f0e' or 'orange'  
+- Green series: '#2ca02c' or 'green'
+- Brown/tan series: '#d62728' or '#8c564b'
+- For turtle example: use blue, orange, green, tan/brown colors
+
+Return ONLY executable Python code with NO explanations, NO markdown backticks.
 
 Example structure:
 import matplotlib.pyplot as plt
 import pandas as pd
 
 # Extract data from description
-data = {...}
+data = {
+    'Year': [...],
+    'Series1': [...],
+    'Series2': [...],
+}
 
 # Create figure
 fig, ax = plt.subplots(figsize=(10, 6))
 
-# Plot data
-# ... your plotting code ...
+# Plot with specific colors matching original
+ax.plot(data['Year'], data['Series1'], color='#1f77b4', marker='o', label='Series1')
+ax.plot(data['Year'], data['Series2'], color='#ff7f0e', marker='o', label='Series2')
 
-# Style
+# Styling
 ax.grid(True, alpha=0.3)
-ax.set_xlabel('...')
-ax.set_ylabel('...')
-ax.set_title('...')
-ax.legend()
+ax.set_xlabel('Year', fontsize=10)
+ax.set_ylabel('Value', fontsize=10)
+ax.set_title('Title from Description', fontsize=12)
+ax.legend(loc='best')
 plt.tight_layout()`;
 
         const codeRes = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -112,10 +139,13 @@ plt.tight_layout()`;
           body: JSON.stringify({
             model: "gpt-4o",
             messages: [
-              { role: "system", content: "Generate clean Python matplotlib code. Output only code, no markdown." },
+              { 
+                role: "system", 
+                content: "You are a data visualization expert. Generate clean Python matplotlib code that matches the described chart style exactly. Output only code, no markdown, no explanations." 
+              },
               { role: "user", content: codeGenPrompt },
             ],
-            temperature: 0.3,
+            temperature: 0.2, // Lower temperature for more consistent styling
           }),
         });
 
@@ -129,10 +159,10 @@ plt.tight_layout()`;
           .replace(/plt\.show\(\)/g, '')
           .trim();
 
-        console.log("✅ Python code generated:", pythonCode.substring(0, 150));
+        console.log("✅ Python code generated:", pythonCode.substring(0, 200));
 
         try {
-          // Create E2B sandbox using the SIMPLE API
+          // Create E2B sandbox
           const sandbox = await Sandbox.create({
             apiKey: process.env.E2B_API_KEY,
             timeoutMs: 30000
@@ -140,7 +170,7 @@ plt.tight_layout()`;
 
           console.log("📦 E2B sandbox created");
 
-          // Execute Python code using runCode (not notebook.execCell)
+          // Execute Python code
           const execution = await sandbox.runCode(pythonCode);
 
           console.log("🔍 Execution completed");
@@ -151,21 +181,18 @@ plt.tight_layout()`;
             throw new Error(execution.error.value || "Python execution failed");
           }
 
-          // Get results (charts are auto-captured by E2B)
+          // Get results
           if (execution.results && execution.results.length > 0) {
             for (const result of execution.results) {
-              console.log("📊 Result type:", result.formats ? result.formats() : typeof result);
-              
-              // E2B returns base64 PNG in result.png
               if (result.png) {
                 generatedImageBase64 = `data:image/png;base64,${result.png}`;
-                console.log("✅ E2B chart generated!");
+                console.log("✅ E2B chart generated with style matching!");
                 break;
               }
             }
           }
 
-          // If still no image, matplotlib might need explicit save
+          // Fallback if no image
           if (!generatedImageBase64) {
             console.log("⚠️ No image found, trying explicit save");
             
