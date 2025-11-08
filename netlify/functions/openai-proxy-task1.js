@@ -1,4 +1,6 @@
-// Calls separate Python function for matplotlib execution
+// E2B Code Interpreter for matplotlib charts
+
+const { CodeInterpreter } = require('@e2b/code-interpreter');
 
 exports.handler = async (event) => {
   try {
@@ -67,7 +69,7 @@ exports.handler = async (event) => {
         console.log("✅ ASCII done");
 
       } else {
-        console.log(`📈 Python matplotlib for ${taskType}`);
+        console.log(`📈 E2B matplotlib for ${taskType}`);
         
         // Generate Python code
         const codeGenPrompt = `Generate Python matplotlib code for ${taskType} from this IELTS description:
@@ -80,12 +82,13 @@ Requirements:
 - Use matplotlib.pyplot as plt and pandas as pd
 - Include: title, labels, legend, grid
 - Style: white background, clear fonts, figsize=(10,6)
-- Return ONLY executable Python code, no explanations, no markdown
-- Do NOT include plt.show() - the code will save to buffer automatically
+- CRITICAL: Save plot to buffer, NOT to file
+- Return ONLY executable Python code, no explanations
 
 Example structure:
 import matplotlib.pyplot as plt
 import pandas as pd
+import io
 
 # Extract data from description
 data = {...}
@@ -102,7 +105,9 @@ ax.set_xlabel('...')
 ax.set_ylabel('...')
 ax.set_title('...')
 ax.legend()
-plt.tight_layout()`;
+plt.tight_layout()
+
+# DO NOT include plt.show() - E2B will capture the plot automatically`;
 
         const codeRes = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
@@ -113,7 +118,7 @@ plt.tight_layout()`;
           body: JSON.stringify({
             model: "gpt-4o",
             messages: [
-              { role: "system", content: "Generate clean Python matplotlib code. Output only code, no markdown, no explanations." },
+              { role: "system", content: "Generate clean Python matplotlib code. Output only code, no markdown." },
               { role: "user", content: codeGenPrompt },
             ],
             temperature: 0.3,
@@ -123,51 +128,76 @@ plt.tight_layout()`;
         const codeData = await codeRes.json();
         let pythonCode = codeData.choices?.[0]?.message?.content?.trim() || "";
         
-        // Clean code more thoroughly
+        // Clean code
         pythonCode = pythonCode
           .replace(/```python\n?/g, '')
           .replace(/```\n?/g, '')
-          .replace(/plt\.show\(\)/g, '')  // Remove plt.show() calls
+          .replace(/plt\.show\(\)/g, '')
           .trim();
 
-        console.log("✅ Python code generated:", pythonCode.substring(0, 200));
+        console.log("✅ Python code generated:", pythonCode.substring(0, 150));
 
         try {
-          // Get base URL from the event
-          const protocol = event.headers['x-forwarded-proto'] || 'https';
-          const host = event.headers['host'];
-          const baseUrl = `${protocol}://${host}`;
-          
-          // Call Python function with full URL
-          const pythonFuncUrl = `${baseUrl}/.netlify/functions/python-viz`;
-          console.log(`🔗 Calling Python function at: ${pythonFuncUrl}`);
-          
-          const pythonRes = await fetch(pythonFuncUrl, {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ code: pythonCode })
+          // Execute Python code in E2B sandbox
+          const sandbox = await CodeInterpreter.create({
+            apiKey: process.env.E2B_API_KEY,
+            timeoutMs: 30000 // 30 second timeout
           });
 
-          console.log(`📊 Python function response status: ${pythonRes.status}`);
+          console.log("📦 E2B sandbox created");
 
-          if (pythonRes.ok) {
-            const pythonData = await pythonRes.json();
-            if (pythonData.success && pythonData.image) {
-              generatedImageBase64 = `data:image/png;base64,${pythonData.image}`;
-              console.log("✅ Python matplotlib chart generated successfully");
-            } else {
-              console.error("Python function returned unsuccessful:", pythonData);
-            }
-          } else {
-            const errorText = await pythonRes.text();
-            console.error(`Python function error (${pythonRes.status}):`, errorText);
+          // Execute the matplotlib code
+          const execution = await sandbox.notebook.execCell(pythonCode);
+
+          // Check for errors
+          if (execution.error) {
+            console.error("❌ Python execution error:", execution.error);
+            throw new Error(execution.error.value || "Python execution failed");
           }
 
-        } catch (pyError) {
-          console.error("❌ Python execution failed:", pyError.message);
-          console.error("Stack trace:", pyError.stack);
+          // Get the plot image from results
+          if (execution.results && execution.results.length > 0) {
+            for (const result of execution.results) {
+              if (result.png) {
+                generatedImageBase64 = `data:image/png;base64,${result.png}`;
+                console.log("✅ E2B matplotlib chart generated successfully");
+                break;
+              }
+            }
+          }
+
+          if (!generatedImageBase64) {
+            console.log("⚠️ No image in results, checking for matplotlib figure");
+            // Sometimes matplotlib doesn't auto-display, try to save explicitly
+            const saveCode = `
+import matplotlib.pyplot as plt
+import io
+import base64
+
+buf = io.BytesIO()
+plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+buf.seek(0)
+img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+print(img_base64)
+plt.close('all')
+`;
+            const saveExec = await sandbox.notebook.execCell(saveCode);
+            if (saveExec.logs && saveExec.logs.stdout && saveExec.logs.stdout.length > 0) {
+              const base64Data = saveExec.logs.stdout.join('').trim();
+              if (base64Data) {
+                generatedImageBase64 = `data:image/png;base64,${base64Data}`;
+                console.log("✅ Chart extracted via explicit save");
+              }
+            }
+          }
+
+          // Close sandbox to free resources
+          await sandbox.close();
+          console.log("📦 E2B sandbox closed");
+
+        } catch (e2bError) {
+          console.error("❌ E2B execution failed:", e2bError.message);
+          console.error("Stack trace:", e2bError.stack);
         }
       }
     }
