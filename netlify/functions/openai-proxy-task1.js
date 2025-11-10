@@ -1,4 +1,4 @@
-// FINAL OPTIMIZED VERSION - Fast and reliable
+// MAXIMUM ACCURACY VERSION - With GPT-4o Vision API
 
 const { Sandbox } = require('@e2b/code-interpreter');
 
@@ -21,7 +21,7 @@ exports.handler = async (event) => {
     let generatedImageBase64 = null;
     let generatedSvg = null;
 
-    // STEP 1: Feedback (always fast)
+    // STEP 1: Feedback
     const feedbackPrompt =
       requestType === "help"
         ? `IELTS examiner: Give short hints (< 150 words) for:\n\n${content}`
@@ -70,22 +70,105 @@ exports.handler = async (event) => {
         console.log("✅ ASCII done");
 
       } else if (taskType === "maps" || taskType === "flowchart") {
-        // FAST SVG GENERATION using GPT-4o-mini
-        console.log(`🗺️ Fast SVG generation for ${taskType}`);
+        // VISION-ENHANCED SVG GENERATION
+        console.log(`🔍 Using Vision API for accurate SVG`);
         
         try {
-          // Simple, concise prompt for speed
-          const svgPrompt = `Create a simple SVG map from this description:
+          // STEP 2A: Analyze original image with Vision
+          console.log("👁️ Analyzing original image with Vision API...");
+          
+          const visionPrompt = `Analyze this IELTS Task 1 map image in detail.
 
+Describe:
+1. **Layout**: How is the map structured? (single view, before/after comparison, top-bottom, side-by-side?)
+2. **Features**: List EVERY feature visible (buildings, trees, water, beach, roads, etc.) with their:
+   - Exact count (e.g., "5 trees", "3 huts")
+   - Approximate positions (e.g., "top-left", "center", "bottom-right")
+   - Sizes (small, medium, large)
+3. **Colors**: What colors are used for each element?
+4. **Spatial relationships**: What is near what? What connects to what?
+5. **Labels**: What text labels are visible?
+6. **Scale/Legend**: Any scale bars or legends?
+
+If this is a before/after comparison:
+- Clearly distinguish what appears in "before" vs "after"
+- Note what changed, was added, or removed
+
+Be extremely specific and detailed. This analysis will be used to create an accurate visualization.`;
+
+          const visionRes = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o",
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    { type: "text", text: visionPrompt },
+                    { 
+                      type: "image_url", 
+                      image_url: { 
+                        url: imageUrl,
+                        detail: "high" // High detail for better analysis
+                      }
+                    }
+                  ]
+                }
+              ],
+              max_tokens: 1500,
+            }),
+          });
+
+          if (!visionRes.ok) {
+            throw new Error(`Vision API error: ${visionRes.status}`);
+          }
+
+          const visionData = await visionRes.json();
+          const imageAnalysis = visionData.choices?.[0]?.message?.content?.trim() || "";
+          
+          console.log("✅ Vision analysis complete");
+          console.log("📋 Analysis preview:", imageAnalysis.substring(0, 200));
+
+          // STEP 2B: Generate SVG based on Vision analysis + student description
+          console.log("🎨 Generating SVG based on Vision analysis...");
+
+          const svgPrompt = `You are creating an SVG visualization based on BOTH the original image analysis AND the student's description.
+
+ORIGINAL IMAGE ANALYSIS (from Vision API):
+${imageAnalysis}
+
+STUDENT'S DESCRIPTION:
 ${content}
 
-Requirements:
-- Start with: <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg">
-- Buildings: rectangles with labels
-- Trees: green circles
-- Water: light blue rectangles
-- Beach: tan/beige rectangles
-- Keep it simple and clear
+TASK: Create an accurate SVG that:
+1. Matches the layout and structure from the original image
+2. Uses the same colors from the original
+3. Shows the same features in similar positions
+4. Reflects what the student described (to compare accuracy)
+
+SVG REQUIREMENTS:
+- viewBox="0 0 1000 700"
+- If before/after: put "before" at top (y=50-300), "after" at bottom (y=400-650)
+- Use <g> groups for organization
+- Label everything clearly
+
+ELEMENTS TO USE:
+Trees: <circle cx="X" cy="Y" r="15" fill="[color from analysis]"/>
+Buildings/Huts: <rect x="X" y="Y" width="60" height="45" fill="[color from analysis]"/>
+  <text x="[center]" y="[center]" font-size="11" fill="white" text-anchor="middle">[Label]</text>
+Water: <rect x="0" y="[bottom area]" width="1000" height="150" fill="#87CEEB"/>
+Beach: <rect x="0" y="[above water]" width="1000" height="100" fill="#F5DEB3"/>
+Pier: <rect x="X" y="Y" width="15" height="80" fill="#8B7355"/>
+
+CRITICAL:
+- Use the EXACT feature counts from the Vision analysis
+- Position features in similar locations as described in the analysis
+- Use the same color scheme
+- If before/after, show clear differences
 
 Output ONLY the SVG code. No markdown. No explanations.`;
 
@@ -96,26 +179,29 @@ Output ONLY the SVG code. No markdown. No explanations.`;
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              model: "gpt-4o-mini", // FAST MODEL
+              model: "gpt-4o",
               messages: [
-                { role: "system", content: "Generate SVG code only. No markdown." },
+                { 
+                  role: "system", 
+                  content: "You create accurate SVG visualizations based on detailed image analysis. Output only SVG code, no markdown." 
+                },
                 { role: "user", content: svgPrompt },
               ],
-              temperature: 0.3,
-              max_tokens: 2000,
+              temperature: 0.2,
+              max_tokens: 3000,
             }),
           });
 
           if (!svgRes.ok) {
-            throw new Error(`OpenAI API error: ${svgRes.status}`);
+            throw new Error(`SVG generation error: ${svgRes.status}`);
           }
 
           const svgData = await svgRes.json();
           let svgCode = svgData.choices?.[0]?.message?.content?.trim() || "";
           
-          console.log("📄 SVG response length:", svgCode.length);
+          console.log("📄 SVG generated, length:", svgCode.length);
           
-          // Aggressive cleaning
+          // Clean thoroughly
           svgCode = svgCode
             .replace(/```svg\s*/gi, '')
             .replace(/```xml\s*/gi, '')
@@ -124,7 +210,7 @@ Output ONLY the SVG code. No markdown. No explanations.`;
             .replace(/(<\/svg>)[^>]*$/i, '$1')
             .trim();
 
-          // Extract if buried
+          // Extract if needed
           const svgMatch = svgCode.match(/<svg[\s\S]*?<\/svg>/i);
           if (svgMatch) {
             svgCode = svgMatch[0];
@@ -133,18 +219,18 @@ Output ONLY the SVG code. No markdown. No explanations.`;
           // Validate
           if (svgCode.startsWith('<svg') && svgCode.includes('</svg>')) {
             generatedSvg = svgCode;
-            console.log("✅ SVG validated:", svgCode.length, "chars");
+            console.log("✅ Vision-enhanced SVG generated:", svgCode.length, "chars");
           } else {
-            console.error("❌ Invalid SVG");
+            console.error("❌ Invalid SVG structure");
           }
 
-        } catch (svgError) {
-          console.error("❌ SVG error:", svgError.message);
-          // Continue without SVG
+        } catch (visionError) {
+          console.error("❌ Vision/SVG error:", visionError.message);
+          // Continue without SVG rather than failing completely
         }
 
       } else {
-        // MATPLOTLIB for charts
+        // MATPLOTLIB for charts (unchanged)
         console.log(`📈 Matplotlib for ${taskType}`);
         
         const codeGenPrompt = `Generate Python matplotlib code for ${taskType}:
@@ -152,11 +238,12 @@ Output ONLY the SVG code. No markdown. No explanations.`;
 ${content}
 
 Requirements:
-- Extract data accurately
-- Use matplotlib.pyplot as plt
+- Extract ALL data accurately from description
+- Use matplotlib.pyplot as plt and pandas as pd
 - figsize=(10,6)
-- Include title, labels, legend
-- Return ONLY code`;
+- Professional styling with grid, labels, legend
+- Match colors if mentioned in description
+- Return ONLY executable code`;
 
         const codeRes = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
@@ -167,7 +254,7 @@ Requirements:
           body: JSON.stringify({
             model: "gpt-4o",
             messages: [
-              { role: "system", content: "Generate Python code only." },
+              { role: "system", content: "Generate clean Python matplotlib code only." },
               { role: "user", content: codeGenPrompt },
             ],
             temperature: 0.2,
@@ -237,7 +324,6 @@ if fig.get_axes():
       }
     }
 
-    // ALWAYS return valid response
     return {
       statusCode: 200,
       headers: { 
@@ -255,7 +341,6 @@ if fig.get_axes():
   } catch (error) {
     console.error("❌ ERROR:", error);
     
-    // Return valid JSON even on error
     return {
       statusCode: 200,
       headers: { "Content-Type": "application/json" },
