@@ -400,7 +400,6 @@
         const API_BASE = 'https://ubiquitous-malasada.netlify.app/.netlify/functions';
 
 // Load available images when category changes
-// Load available images when category changes
 categorySelect.addEventListener('change', async () => {
   const category = categorySelect.value;
   if (!category) {
@@ -590,7 +589,7 @@ randomImageBtn.addEventListener('click', () => {
             }
 
             if (type === 'full-feedback') {
-              (data);
+              displayFullFeedback(data);  // ✅ FIXED: Was "(data)" - typo!
             } else {
               feedbackContainer.innerHTML = formatHelpFeedback(data.feedback);
             }
@@ -609,18 +608,6 @@ function displayFullFeedback(data) {
   // Reset comparison area
   comparisonContainer.innerHTML = "";
   comparisonContainer.style.display = "block";
-
-  // DEBUG: Log what we received
-  console.log("=== DEBUG INFO ===");
-  console.log("Has asciiTable:", !!data.asciiTable);
-  console.log("Has generatedSvg:", !!data.generatedSvg);
-  console.log("Has generatedImageBase64:", !!data.generatedImageBase64);
-  
-  if (data.generatedSvg) {
-    console.log("SVG length:", data.generatedSvg.length);
-    console.log("SVG starts with:", data.generatedSvg.substring(0, 100));
-    console.log("SVG ends with:", data.generatedSvg.substring(data.generatedSvg.length - 100));
-  }
 
   // Case 1: ASCII table
   if (data.asciiTable) {
@@ -641,10 +628,8 @@ ${data.asciiTable}
     return;
   }
 
-  // Case 2: SVG visualization - WITH DEBUG
+  // Case 2: SVG visualization
   if (data.generatedSvg) {
-    console.log("✅ Rendering SVG");
-    
     comparisonContainer.innerHTML = `
       <div class="comparison-container">
         <div class="comparison-side">
@@ -653,14 +638,7 @@ ${data.asciiTable}
         </div>
         <div class="comparison-side">
           <h5>🎨 SVG Visualization of Your Description</h5>
-          
-          <!-- DEBUG INFO -->
-          <div style="background: #fffbea; padding: 10px; margin-bottom: 10px; border-radius: 4px; font-size: 12px;">
-            <strong>Debug:</strong> SVG length = ${data.generatedSvg.length} characters
-          </div>
-          
-          <!-- SVG CONTAINER -->
-          <div id="svg-container" style="
+          <div style="
             background: white; 
             padding: 15px; 
             border-radius: 4px; 
@@ -673,27 +651,12 @@ ${data.asciiTable}
           ">
             ${data.generatedSvg}
           </div>
-          
           <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
             Vector illustration generated from your description using SVG.
           </p>
         </div>
       </div>
     `;
-    
-    // Check if SVG rendered
-    setTimeout(() => {
-      const svgContainer = document.getElementById('svg-container');
-      const svgElement = svgContainer.querySelector('svg');
-      if (svgElement) {
-        console.log("✅ SVG element found in DOM");
-        console.log("SVG dimensions:", svgElement.getAttribute('viewBox'));
-      } else {
-        console.error("❌ No SVG element found in DOM!");
-        console.error("Container innerHTML:", svgContainer.innerHTML.substring(0, 200));
-      }
-    }, 100);
-    
     return;
   }
 
@@ -716,14 +679,7 @@ ${data.asciiTable}
     `;
     return;
   }
-  
-  // No visualization
-  console.warn("⚠️ No visualization data received");
 }
-
-
-
-
 
         function formatFullFeedback(fb) {
           const text = fb.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
