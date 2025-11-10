@@ -1,4 +1,4 @@
-// E2B Code Interpreter for matplotlib charts with style matching
+// E2B Code Interpreter with SVG support for maps/diagrams
 
 const { Sandbox } = require('@e2b/code-interpreter');
 
@@ -19,6 +19,7 @@ exports.handler = async (event) => {
     let feedback = "";
     let asciiTable = null;
     let generatedImageBase64 = null;
+    let generatedSvg = null;
 
     // STEP 1: Feedback
     const feedbackPrompt =
@@ -68,66 +69,109 @@ exports.handler = async (event) => {
         asciiTable = asciiData.choices?.[0]?.message?.content?.trim() || "";
         console.log("✅ ASCII done");
 
-      } else {
-        console.log(`📈 E2B matplotlib for ${taskType}`);
+      } else if (taskType === "maps" || taskType === "flowchart") {
+        // SVG GENERATION for maps and flowcharts
+        console.log(`🗺️ SVG generation for ${taskType}`);
         
-        // Enhanced code generation with vision analysis
-        const codeGenPrompt = `You are analyzing an IELTS Task 1 description and will generate Python matplotlib code that matches the ORIGINAL image style.
+        const svgPrompt = `Generate an SVG visualization for this IELTS Task 1 ${taskType} description:
 
-DESCRIPTION:
 ${content}
 
-TASK TYPE: ${taskType}
+REQUIREMENTS:
+- Create a complete, valid SVG with viewBox
+- Use clear shapes: rectangles, circles, paths, text
+- Include labels for all locations/elements
+- Use professional colors (blues, greens, grays)
+- Make it visually clear and organized
+- Size: viewBox="0 0 800 600" or similar
+- Add a title at the top
+
+For MAPS:
+- Show buildings as rectangles with labels
+- Use different colors for different zones
+- Include roads/paths as lines or rectangles
+- Add compass direction if mentioned
+- Show water as blue areas
+
+For FLOWCHARTS:
+- Use rectangles for processes
+- Use arrows to show flow
+- Label each step clearly
+- Use consistent spacing
+
+Return ONLY the complete SVG code, starting with <svg> and ending with </svg>.
+NO explanations, NO markdown backticks.`;
+
+        const svgRes = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "gpt-4o",
+            messages: [
+              { 
+                role: "system", 
+                content: "You are an expert at creating SVG visualizations. Generate clean, valid SVG code only. No markdown, no explanations." 
+              },
+              { role: "user", content: svgPrompt },
+            ],
+            temperature: 0.3,
+          }),
+        });
+
+        const svgData = await svgRes.json();
+        let svgCode = svgData.choices?.[0]?.message?.content?.trim() || "";
+        
+        // Clean SVG code
+        svgCode = svgCode
+          .replace(/```svg\n?/g, '')
+          .replace(/```xml\n?/g, '')
+          .replace(/```\n?/g, '')
+          .trim();
+
+        if (svgCode.startsWith('<svg')) {
+          generatedSvg = svgCode;
+          console.log("✅ SVG generated");
+        }
+
+      } else {
+        // MATPLOTLIB for charts (line-graph, bar-chart, pie-chart)
+        console.log(`📈 Matplotlib for ${taskType}`);
+        
+        const codeGenPrompt = `Generate Python matplotlib code for ${taskType} from this IELTS description:
+
+${content}
 
 REQUIREMENTS:
-1. Extract ALL data accurately from the description
-2. Match the visual style of the original chart as closely as possible
-3. Use matplotlib.pyplot as plt and pandas as pd
-4. Figure size: figsize=(10, 6)
-5. Professional styling with white background
-
-STYLE MATCHING INSTRUCTIONS:
-- If the description mentions specific colors (blue, orange, green, etc.), use those EXACT colors
-- If colors are mentioned for specific series, match them precisely
-- Match line styles (solid, dashed, dotted) if described
-- Match marker styles (circles, squares, etc.) if mentioned
-- Use the same axis labels and title style as described
-- Include grid if the description mentions it
-- Add legend with proper positioning
-
-COMMON COLOR MAPPINGS:
-- Blue series: '#1f77b4' or 'blue'
-- Orange series: '#ff7f0e' or 'orange'  
-- Green series: '#2ca02c' or 'green'
-- Brown/tan series: '#d62728' or '#8c564b'
-- For turtle example: use blue, orange, green, tan/brown colors
-
-Return ONLY executable Python code with NO explanations, NO markdown backticks.
+- Extract ALL data accurately
+- Create professional ${taskType}
+- Use matplotlib.pyplot as plt and pandas as pd
+- Include: title, labels, legend, grid
+- Style: white background, clear fonts, figsize=(10,6)
+- Match colors if mentioned in description
+- Return ONLY executable Python code, no explanations
 
 Example structure:
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# Extract data from description
-data = {
-    'Year': [...],
-    'Series1': [...],
-    'Series2': [...],
-}
+# Extract data
+data = {...}
 
 # Create figure
 fig, ax = plt.subplots(figsize=(10, 6))
 
-# Plot with specific colors matching original
-ax.plot(data['Year'], data['Series1'], color='#1f77b4', marker='o', label='Series1')
-ax.plot(data['Year'], data['Series2'], color='#ff7f0e', marker='o', label='Series2')
+# Plot with colors
+ax.plot(data['x'], data['y'], color='blue', marker='o', label='Series')
 
 # Styling
 ax.grid(True, alpha=0.3)
-ax.set_xlabel('Year', fontsize=10)
-ax.set_ylabel('Value', fontsize=10)
-ax.set_title('Title from Description', fontsize=12)
-ax.legend(loc='best')
+ax.set_xlabel('X Label')
+ax.set_ylabel('Y Label')
+ax.set_title('Title')
+ax.legend()
 plt.tight_layout()`;
 
         const codeRes = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -139,13 +183,10 @@ plt.tight_layout()`;
           body: JSON.stringify({
             model: "gpt-4o",
             messages: [
-              { 
-                role: "system", 
-                content: "You are a data visualization expert. Generate clean Python matplotlib code that matches the described chart style exactly. Output only code, no markdown, no explanations." 
-              },
+              { role: "system", content: "Generate clean Python matplotlib code. Output only code, no markdown." },
               { role: "user", content: codeGenPrompt },
             ],
-            temperature: 0.2, // Lower temperature for more consistent styling
+            temperature: 0.2,
           }),
         });
 
@@ -159,10 +200,9 @@ plt.tight_layout()`;
           .replace(/plt\.show\(\)/g, '')
           .trim();
 
-        console.log("✅ Python code generated:", pythonCode.substring(0, 200));
+        console.log("✅ Python code generated");
 
         try {
-          // Create E2B sandbox
           const sandbox = await Sandbox.create({
             apiKey: process.env.E2B_API_KEY,
             timeoutMs: 30000
@@ -170,32 +210,24 @@ plt.tight_layout()`;
 
           console.log("📦 E2B sandbox created");
 
-          // Execute Python code
           const execution = await sandbox.runCode(pythonCode);
 
-          console.log("🔍 Execution completed");
-
-          // Check for errors
           if (execution.error) {
-            console.error("❌ Python execution error:", execution.error);
+            console.error("❌ Python error:", execution.error);
             throw new Error(execution.error.value || "Python execution failed");
           }
 
-          // Get results
           if (execution.results && execution.results.length > 0) {
             for (const result of execution.results) {
               if (result.png) {
                 generatedImageBase64 = `data:image/png;base64,${result.png}`;
-                console.log("✅ E2B chart generated with style matching!");
+                console.log("✅ Matplotlib chart generated");
                 break;
               }
             }
           }
 
-          // Fallback if no image
           if (!generatedImageBase64) {
-            console.log("⚠️ No image found, trying explicit save");
-            
             const saveCode = `
 import matplotlib.pyplot as plt
 import io
@@ -211,25 +243,22 @@ if fig.get_axes():
     plt.close('all')
     print(img_base64)
 `;
-
             const saveExec = await sandbox.runCode(saveCode);
             
             if (saveExec.logs && saveExec.logs.stdout && saveExec.logs.stdout.length > 0) {
               const output = saveExec.logs.stdout.join('').trim();
               if (output && output.length > 100) {
                 generatedImageBase64 = `data:image/png;base64,${output}`;
-                console.log("✅ Chart extracted via explicit save");
+                console.log("✅ Chart via explicit save");
               }
             }
           }
 
-          // Close sandbox
           await sandbox.close();
           console.log("📦 E2B sandbox closed");
 
         } catch (e2bError) {
-          console.error("❌ E2B execution failed:", e2bError.message);
-          console.error("Stack trace:", e2bError.stack);
+          console.error("❌ E2B failed:", e2bError.message);
         }
       }
     }
@@ -244,6 +273,7 @@ if fig.get_axes():
         feedback,
         asciiTable,
         generatedImageBase64,
+        generatedSvg,  // NEW: SVG for maps/flowcharts
       }),
     };
 
