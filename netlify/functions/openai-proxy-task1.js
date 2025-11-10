@@ -1,4 +1,4 @@
-// IMPROVED SVG Generation - Better quality and proper display
+// E2B Code Interpreter with ROBUST SVG validation
 
 const { Sandbox } = require('@e2b/code-interpreter');
 
@@ -70,89 +70,35 @@ exports.handler = async (event) => {
         console.log("✅ ASCII done");
 
       } else if (taskType === "maps" || taskType === "flowchart") {
-        // IMPROVED SVG GENERATION
+        // SVG GENERATION with robust cleaning
         console.log(`🗺️ SVG generation for ${taskType}`);
         
-        const svgPrompt = `You are creating an SVG visualization for an IELTS Task 1 ${taskType}.
+        const svgPrompt = `Create an SVG visualization for this IELTS Task 1 ${taskType}:
 
-DESCRIPTION TO VISUALIZE:
 ${content}
 
-CRITICAL SVG REQUIREMENTS:
+CRITICAL REQUIREMENTS:
+1. Start with <svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
+2. End with </svg>
+3. Use professional layout and colors
+4. Include clear labels and compass
+5. For before/after maps, show both side-by-side or top-bottom
 
-1. STRUCTURE:
-   - Start with: <svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
-   - End with: </svg>
-   - Use clean, organized groups with <g> tags
+COLOR PALETTE:
+- Water: #87CEEB
+- Land/Beach: #F5DEB3
+- Buildings: #8B4513 or #1E4D7B
+- Trees: #228B22
+- Text: #333 or white on dark backgrounds
 
-2. LAYOUT (for maps):
-   - Use a top-down or side-by-side layout showing different time periods if applicable
-   - Add clear title/year labels for each section
-   - Place compass (N arrow) in top-right corner
-   - Use consistent scale between sections
+LAYOUT:
+- Buildings as rectangles (rx="3" for rounded corners)
+- Trees as circles
+- Water as large rectangles at bottom
+- Clear spacing between elements (20-30px)
+- Font: Arial, sizes 12-24px
 
-3. VISUAL ELEMENTS:
-   - Buildings: Use <rect> with rounded corners (rx="3")
-   - Water/Sea: Use light blue (#87CEEB or #B8D4E8)
-   - Land/Beach: Use tan/beige (#F5DEB3 or #F0E68C)
-   - Trees: Use <circle> with green (#228B22 or #32CD32)
-   - Roads/Paths: Use gray rectangles (#999 or #CCC)
-   - Compass: Simple cross with "N" label
-
-4. COLORS:
-   - Buildings: Brown (#8B4513), dark blue (#1E4D7B), or gray (#666)
-   - Labels: White text on dark backgrounds, or dark gray (#333) on light
-   - Water: Light blue (#87CEEB)
-   - Land: Beige/tan (#F5DEB3)
-   - Trees: Green (#228B22)
-
-5. TEXT:
-   - Font: Arial or sans-serif
-   - Building labels: 14-16px, white on dark background
-   - Section titles: 24px, bold
-   - Feature labels: 12px
-
-6. PROPORTIONS:
-   - Make buildings appropriately sized (50x40 to 120x80)
-   - Leave adequate spacing between elements (20-30px minimum)
-   - Use realistic proportions
-
-7. FOR "BEFORE/AFTER" MAPS:
-   - Place two maps side-by-side or top-bottom
-   - Label clearly: "1967" and "Now" or "Before" and "After"
-   - Keep same scale and orientation
-   - Show what changed, what stayed the same
-
-EXAMPLE STRUCTURE FOR A MAP:
-<svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
-  <!-- Title -->
-  <text x="500" y="30" font-size="24" font-weight="bold" text-anchor="middle" fill="#333">
-    Location Name (Year)
-  </text>
-  
-  <!-- Compass -->
-  <g transform="translate(950, 80)">
-    <line x1="0" y1="-20" x2="0" y2="20" stroke="#333" stroke-width="2"/>
-    <line x1="-20" y1="0" x2="20" y2="0" stroke="#333" stroke-width="2"/>
-    <text x="5" y="-25" font-size="16" font-weight="bold">N</text>
-  </g>
-  
-  <!-- Water -->
-  <rect x="0" y="550" width="1000" height="150" fill="#87CEEB"/>
-  <text x="500" y="630" font-size="16" text-anchor="middle" fill="#333">Sea</text>
-  
-  <!-- Land -->
-  <rect x="0" y="450" width="1000" height="100" fill="#F5DEB3"/>
-  
-  <!-- Building example -->
-  <rect x="200" y="250" width="80" height="60" fill="#8B4513" rx="3"/>
-  <text x="240" y="285" font-size="14" fill="white" text-anchor="middle" font-weight="bold">Hotel</text>
-  
-  <!-- Tree example -->
-  <circle cx="350" cy="280" r="25" fill="#228B22"/>
-</svg>
-
-Return ONLY the complete, valid SVG code. NO markdown, NO explanations, NO backticks.`;
+Return ONLY the SVG code. NO explanations. NO markdown. NO backticks. Just pure SVG starting with <svg and ending with </svg>.`;
 
         const svgRes = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
@@ -165,7 +111,7 @@ Return ONLY the complete, valid SVG code. NO markdown, NO explanations, NO backt
             messages: [
               { 
                 role: "system", 
-                content: "You are an expert SVG designer creating clean, professional map visualizations for IELTS students. Output ONLY valid SVG code with no markdown formatting." 
+                content: "You generate SVG code ONLY. Never use markdown formatting. Output pure SVG starting with <svg> tag." 
               },
               { role: "user", content: svgPrompt },
             ],
@@ -176,19 +122,41 @@ Return ONLY the complete, valid SVG code. NO markdown, NO explanations, NO backt
         const svgData = await svgRes.json();
         let svgCode = svgData.choices?.[0]?.message?.content?.trim() || "";
         
-        // Clean SVG code thoroughly
+        console.log("📄 Raw SVG response (first 200 chars):", svgCode.substring(0, 200));
+        
+        // AGGRESSIVE cleaning - remove ALL markdown formatting
         svgCode = svgCode
-          .replace(/```svg\s*/g, '')
-          .replace(/```xml\s*/g, '')
+          // Remove markdown code blocks
+          .replace(/```svg\s*/gi, '')
+          .replace(/```xml\s*/gi, '')
+          .replace(/```html\s*/gi, '')
           .replace(/```\s*/g, '')
+          // Remove any leading/trailing text before <svg
+          .replace(/^[^<]*(<svg)/i, '$1')
+          // Remove any trailing text after </svg>
+          .replace(/(<\/svg>)[^>]*$/i, '$1')
           .trim();
 
-        // Validate it starts with <svg
-        if (svgCode.startsWith('<svg')) {
+        console.log("🧹 Cleaned SVG (first 200 chars):", svgCode.substring(0, 200));
+        
+        // Validate SVG
+        const svgValid = svgCode.startsWith('<svg') && svgCode.includes('</svg>');
+        
+        if (svgValid) {
           generatedSvg = svgCode;
-          console.log("✅ SVG generated successfully");
+          console.log("✅ SVG validated and ready");
+          console.log("📏 SVG length:", svgCode.length);
         } else {
-          console.error("❌ Invalid SVG code generated");
+          console.error("❌ Invalid SVG structure");
+          console.error("Starts with:", svgCode.substring(0, 50));
+          console.error("Ends with:", svgCode.substring(svgCode.length - 50));
+          
+          // Try to extract SVG if it's buried in text
+          const svgMatch = svgCode.match(/<svg[\s\S]*?<\/svg>/i);
+          if (svgMatch) {
+            generatedSvg = svgMatch[0];
+            console.log("✅ Extracted SVG from response");
+          }
         }
 
       } else {
@@ -205,26 +173,19 @@ REQUIREMENTS:
 - Use matplotlib.pyplot as plt and pandas as pd
 - Include: title, labels, legend, grid
 - Style: white background, clear fonts, figsize=(10,6)
-- Match colors if mentioned in description
-- Return ONLY executable Python code, no explanations
+- Match colors if mentioned
+- Return ONLY executable Python code
 
-Example structure:
+Example:
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# Extract data
 data = {...}
-
-# Create figure
 fig, ax = plt.subplots(figsize=(10, 6))
-
-# Plot with colors
 ax.plot(data['x'], data['y'], color='blue', marker='o', label='Series')
-
-# Styling
 ax.grid(True, alpha=0.3)
-ax.set_xlabel('X Label')
-ax.set_ylabel('Y Label')
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
 ax.set_title('Title')
 ax.legend()
 plt.tight_layout()`;
@@ -238,7 +199,7 @@ plt.tight_layout()`;
           body: JSON.stringify({
             model: "gpt-4o",
             messages: [
-              { role: "system", content: "Generate clean Python matplotlib code. Output only code, no markdown." },
+              { role: "system", content: "Generate clean Python matplotlib code. Output only code." },
               { role: "user", content: codeGenPrompt },
             ],
             temperature: 0.2,
@@ -254,19 +215,15 @@ plt.tight_layout()`;
           .replace(/plt\.show\(\)/g, '')
           .trim();
 
-        console.log("✅ Python code generated");
-
         try {
           const sandbox = await Sandbox.create({
             apiKey: process.env.E2B_API_KEY,
             timeoutMs: 30000
           });
 
-          console.log("📦 E2B sandbox created");
           const execution = await sandbox.runCode(pythonCode);
 
           if (execution.error) {
-            console.error("❌ Python error:", execution.error);
             throw new Error(execution.error.value || "Python execution failed");
           }
 
@@ -274,7 +231,6 @@ plt.tight_layout()`;
             for (const result of execution.results) {
               if (result.png) {
                 generatedImageBase64 = `data:image/png;base64,${result.png}`;
-                console.log("✅ Matplotlib chart generated");
                 break;
               }
             }
@@ -302,13 +258,11 @@ if fig.get_axes():
               const output = saveExec.logs.stdout.join('').trim();
               if (output && output.length > 100) {
                 generatedImageBase64 = `data:image/png;base64,${output}`;
-                console.log("✅ Chart via explicit save");
               }
             }
           }
 
           await sandbox.close();
-          console.log("📦 E2B sandbox closed");
 
         } catch (e2bError) {
           console.error("❌ E2B failed:", e2bError.message);
