@@ -651,7 +651,19 @@ ${data.asciiTable}
     return;
   }
 
-  // Case 3: Fallback to DALL-E style image (legacy)
+          
+    // Case 3: SVG for maps
+if (data.generatedSvg) {
+  comparisonContainer.innerHTML = `
+    <div class="comparison-side">
+      <h5>🎨 SVG Visualization</h5>
+      <div>${data.generatedSvg}</div>
+    </div>
+  `;
+  return;
+}
+          
+  // Case 4: Fallback to DALL-E style image (legacy)
   if (data.generatedImageUrl) {
     comparisonContainer.innerHTML = `
       <div class="comparison-container">
