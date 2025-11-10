@@ -1,4 +1,4 @@
-// E2B Code Interpreter with ROBUST SVG validation
+// FINAL OPTIMIZED VERSION - Fast and reliable
 
 const { Sandbox } = require('@e2b/code-interpreter');
 
@@ -21,7 +21,7 @@ exports.handler = async (event) => {
     let generatedImageBase64 = null;
     let generatedSvg = null;
 
-    // STEP 1: Feedback
+    // STEP 1: Feedback (always fast)
     const feedbackPrompt =
       requestType === "help"
         ? `IELTS examiner: Give short hints (< 150 words) for:\n\n${content}`
@@ -70,125 +70,93 @@ exports.handler = async (event) => {
         console.log("✅ ASCII done");
 
       } else if (taskType === "maps" || taskType === "flowchart") {
-        // SVG GENERATION with robust cleaning
-        console.log(`🗺️ SVG generation for ${taskType}`);
+        // FAST SVG GENERATION using GPT-4o-mini
+        console.log(`🗺️ Fast SVG generation for ${taskType}`);
         
-        const svgPrompt = `Create an SVG visualization for this IELTS Task 1 ${taskType}:
+        try {
+          // Simple, concise prompt for speed
+          const svgPrompt = `Create a simple SVG map from this description:
 
 ${content}
 
-CRITICAL REQUIREMENTS:
-1. Start with <svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
-2. End with </svg>
-3. Use professional layout and colors
-4. Include clear labels and compass
-5. For before/after maps, show both side-by-side or top-bottom
+Requirements:
+- Start with: <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg">
+- Buildings: rectangles with labels
+- Trees: green circles
+- Water: light blue rectangles
+- Beach: tan/beige rectangles
+- Keep it simple and clear
 
-COLOR PALETTE:
-- Water: #87CEEB
-- Land/Beach: #F5DEB3
-- Buildings: #8B4513 or #1E4D7B
-- Trees: #228B22
-- Text: #333 or white on dark backgrounds
+Output ONLY the SVG code. No markdown. No explanations.`;
 
-LAYOUT:
-- Buildings as rectangles (rx="3" for rounded corners)
-- Trees as circles
-- Water as large rectangles at bottom
-- Clear spacing between elements (20-30px)
-- Font: Arial, sizes 12-24px
+          const svgRes = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o-mini", // FAST MODEL
+              messages: [
+                { role: "system", content: "Generate SVG code only. No markdown." },
+                { role: "user", content: svgPrompt },
+              ],
+              temperature: 0.3,
+              max_tokens: 2000,
+            }),
+          });
 
-Return ONLY the SVG code. NO explanations. NO markdown. NO backticks. Just pure SVG starting with <svg and ending with </svg>.`;
+          if (!svgRes.ok) {
+            throw new Error(`OpenAI API error: ${svgRes.status}`);
+          }
 
-        const svgRes = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "gpt-4o",
-            messages: [
-              { 
-                role: "system", 
-                content: "You generate SVG code ONLY. Never use markdown formatting. Output pure SVG starting with <svg> tag." 
-              },
-              { role: "user", content: svgPrompt },
-            ],
-            temperature: 0.3,
-          }),
-        });
-
-        const svgData = await svgRes.json();
-        let svgCode = svgData.choices?.[0]?.message?.content?.trim() || "";
-        
-        console.log("📄 Raw SVG response (first 200 chars):", svgCode.substring(0, 200));
-        
-        // AGGRESSIVE cleaning - remove ALL markdown formatting
-        svgCode = svgCode
-          // Remove markdown code blocks
-          .replace(/```svg\s*/gi, '')
-          .replace(/```xml\s*/gi, '')
-          .replace(/```html\s*/gi, '')
-          .replace(/```\s*/g, '')
-          // Remove any leading/trailing text before <svg
-          .replace(/^[^<]*(<svg)/i, '$1')
-          // Remove any trailing text after </svg>
-          .replace(/(<\/svg>)[^>]*$/i, '$1')
-          .trim();
-
-        console.log("🧹 Cleaned SVG (first 200 chars):", svgCode.substring(0, 200));
-        
-        // Validate SVG
-        const svgValid = svgCode.startsWith('<svg') && svgCode.includes('</svg>');
-        
-        if (svgValid) {
-          generatedSvg = svgCode;
-          console.log("✅ SVG validated and ready");
-          console.log("📏 SVG length:", svgCode.length);
-        } else {
-          console.error("❌ Invalid SVG structure");
-          console.error("Starts with:", svgCode.substring(0, 50));
-          console.error("Ends with:", svgCode.substring(svgCode.length - 50));
+          const svgData = await svgRes.json();
+          let svgCode = svgData.choices?.[0]?.message?.content?.trim() || "";
           
-          // Try to extract SVG if it's buried in text
+          console.log("📄 SVG response length:", svgCode.length);
+          
+          // Aggressive cleaning
+          svgCode = svgCode
+            .replace(/```svg\s*/gi, '')
+            .replace(/```xml\s*/gi, '')
+            .replace(/```\s*/g, '')
+            .replace(/^[^<]*(<svg)/i, '$1')
+            .replace(/(<\/svg>)[^>]*$/i, '$1')
+            .trim();
+
+          // Extract if buried
           const svgMatch = svgCode.match(/<svg[\s\S]*?<\/svg>/i);
           if (svgMatch) {
-            generatedSvg = svgMatch[0];
-            console.log("✅ Extracted SVG from response");
+            svgCode = svgMatch[0];
           }
+
+          // Validate
+          if (svgCode.startsWith('<svg') && svgCode.includes('</svg>')) {
+            generatedSvg = svgCode;
+            console.log("✅ SVG validated:", svgCode.length, "chars");
+          } else {
+            console.error("❌ Invalid SVG");
+          }
+
+        } catch (svgError) {
+          console.error("❌ SVG error:", svgError.message);
+          // Continue without SVG
         }
 
       } else {
         // MATPLOTLIB for charts
         console.log(`📈 Matplotlib for ${taskType}`);
         
-        const codeGenPrompt = `Generate Python matplotlib code for ${taskType} from this IELTS description:
+        const codeGenPrompt = `Generate Python matplotlib code for ${taskType}:
 
 ${content}
 
-REQUIREMENTS:
-- Extract ALL data accurately
-- Create professional ${taskType}
-- Use matplotlib.pyplot as plt and pandas as pd
-- Include: title, labels, legend, grid
-- Style: white background, clear fonts, figsize=(10,6)
-- Match colors if mentioned
-- Return ONLY executable Python code
-
-Example:
-import matplotlib.pyplot as plt
-import pandas as pd
-
-data = {...}
-fig, ax = plt.subplots(figsize=(10, 6))
-ax.plot(data['x'], data['y'], color='blue', marker='o', label='Series')
-ax.grid(True, alpha=0.3)
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-ax.set_title('Title')
-ax.legend()
-plt.tight_layout()`;
+Requirements:
+- Extract data accurately
+- Use matplotlib.pyplot as plt
+- figsize=(10,6)
+- Include title, labels, legend
+- Return ONLY code`;
 
         const codeRes = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
@@ -199,7 +167,7 @@ plt.tight_layout()`;
           body: JSON.stringify({
             model: "gpt-4o",
             messages: [
-              { role: "system", content: "Generate clean Python matplotlib code. Output only code." },
+              { role: "system", content: "Generate Python code only." },
               { role: "user", content: codeGenPrompt },
             ],
             temperature: 0.2,
@@ -218,13 +186,13 @@ plt.tight_layout()`;
         try {
           const sandbox = await Sandbox.create({
             apiKey: process.env.E2B_API_KEY,
-            timeoutMs: 30000
+            timeoutMs: 25000
           });
 
           const execution = await sandbox.runCode(pythonCode);
 
           if (execution.error) {
-            throw new Error(execution.error.value || "Python execution failed");
+            throw new Error(execution.error.value || "Python failed");
           }
 
           if (execution.results && execution.results.length > 0) {
@@ -241,7 +209,6 @@ plt.tight_layout()`;
 import matplotlib.pyplot as plt
 import io
 import base64
-
 fig = plt.gcf()
 if fig.get_axes():
     buf = io.BytesIO()
@@ -270,6 +237,7 @@ if fig.get_axes():
       }
     }
 
+    // ALWAYS return valid response
     return {
       statusCode: 200,
       headers: { 
@@ -286,12 +254,17 @@ if fig.get_axes():
 
   } catch (error) {
     console.error("❌ ERROR:", error);
+    
+    // Return valid JSON even on error
     return {
-      statusCode: 500,
+      statusCode: 200,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         error: true,
-        feedback: `Error: ${error.message}`,
+        feedback: "An error occurred. Please try again.",
+        asciiTable: null,
+        generatedImageBase64: null,
+        generatedSvg: null,
       }),
     };
   }
