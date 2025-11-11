@@ -1,10 +1,11 @@
-// VISION PRELOAD VERSION - Load Vision analysis when image loads
+// SIMPLIFIED APPROACH - Direct SVG Generation from Student Description
+// No Vision API needed for maps - just use GPT to create SVG directly!
 
 const { Sandbox } = require('@e2b/code-interpreter');
 
 exports.handler = async (event) => {
   try {
-    const { content, requestType, taskType, imageUrl, imageName, cachedVisionAnalysis } = JSON.parse(event.body || "{}");
+    const { content, requestType, taskType, imageUrl, imageName } = JSON.parse(event.body || "{}");
 
     if (!requestType) {
       return {
@@ -15,183 +16,6 @@ exports.handler = async (event) => {
     }
 
     console.log(`📩 ${requestType} | ${taskType} | ${imageName || 'no-name'}`);
-
-    // SPECIAL REQUEST TYPE: Just preload Vision analysis
-    if (requestType === "preload-vision") {
-      console.log(`👁️ Preloading Vision analysis for ${imageName}`);
-      
-      try {
-        // Check for cached analysis first
-        if (imageName) {
-          const visionFileName = imageName.replace(/\.(png|jpg|jpeg|webp)$/i, '.txt');
-          const owner = "Gleb-A-Lantsman";
-          const repo = "IELTSTask1Checker";
-          const visionPath = `visuals/${taskType}/${visionFileName}`;
-          const visionUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${visionPath}`;
-          
-          console.log(`📂 Checking cache: ${visionFileName}`);
-          
-          try {
-            const cacheResponse = await fetch(visionUrl);
-            
-            if (cacheResponse.ok) {
-              const cacheData = await cacheResponse.json();
-              const visionAnalysis = Buffer.from(cacheData.content, 'base64').toString('utf-8');
-              console.log("✅ Loaded from cache");
-              
-              return {
-                statusCode: 200,
-                headers: { 
-                  "Content-Type": "application/json",
-                  "Access-Control-Allow-Origin": "*"
-                },
-                body: JSON.stringify({
-                  visionAnalysis,
-                  cached: true,
-                }),
-              };
-            }
-          } catch (cacheError) {
-            console.log("⚠️ Cache miss");
-          }
-        }
-
-        // No cache - run Vision API
-        console.log("👁️ Running Vision API...");
-        console.log("Image URL:", imageUrl?.substring(0, 100));
-        console.log("Task type:", taskType);
-        
-        const visionPrompt = `Analyze this IELTS map in DETAIL for accurate SVG recreation:
-
-**STRUCTURE:**
-- Before/after comparison or single view?
-- Layout orientation (horizontal/vertical split?)
-
-**SPATIAL LAYOUT (be very specific):**
-- Island shape and outline
-- Water body positions (which edges: north/south/east/west?)
-- Beach/shore locations and extent
-- Pier/jetty locations and orientations
-- Road/path layouts (describe curves, intersections)
-
-**FEATURES - BEFORE MAP:**
-For each feature type, describe:
-- Exact count
-- Spatial distribution (clustered? scattered? in a line?)
-- Specific locations (e.g., "3 trees in NW corner", "palm trees along eastern shore")
-- Relative positions to each other
-
-**FEATURES - AFTER MAP:**
-Same detail as above, plus:
-- NEW buildings: locations, sizes, arrangements (grid? scattered?)
-- NEW infrastructure: describe layout precisely
-- REMOVED features: what disappeared?
-- UNCHANGED features: what stayed?
-
-**VISUAL DETAILS:**
-- Colors used for each element type
-- Icon styles (simple shapes? detailed drawings?)
-- Size relationships between elements
-- Any labels or legends
-
-**KEY LANDMARKS:**
-- Any distinctive features that anchor the layout
-- Reference points for positioning other elements
-
-Be specific about POSITIONS - use compass directions, relative distances, groupings. This will be used to recreate the map accurately.`;
-
-        const visionRes = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "gpt-4o",
-            messages: [
-              {
-                role: "user",
-                content: [
-                  { type: "text", text: visionPrompt },
-                  { 
-                    type: "image_url", 
-                    image_url: { 
-                      url: imageUrl,
-                      detail: "high"  // Changed to high for better analysis
-                    }
-                  }
-                ]
-              }
-            ],
-            max_tokens: 1500,
-            temperature: 0.1,
-          }),
-        });
-
-        if (!visionRes.ok) {
-          const errorText = await visionRes.text();
-          console.error(`❌ Vision API error: ${visionRes.status}`, errorText);
-          throw new Error(`Vision API error: ${visionRes.status} - ${errorText.substring(0, 200)}`);
-        }
-
-        // Check if response has content before parsing
-        const responseText = await visionRes.text();
-        if (!responseText || responseText.trim().length === 0) {
-          throw new Error('Vision API returned empty response');
-        }
-
-        let visionData;
-        try {
-          visionData = JSON.parse(responseText);
-        } catch (parseError) {
-          console.error('❌ JSON parse error:', responseText.substring(0, 500));
-          throw new Error(`Failed to parse Vision API response: ${parseError.message}`);
-        }
-
-        const visionAnalysis = visionData.choices?.[0]?.message?.content?.trim() || "";
-        
-        if (!visionAnalysis) {
-          console.error('❌ No vision analysis in response:', JSON.stringify(visionData));
-          throw new Error('Vision API returned no analysis content');
-        }
-        
-        console.log("✅ Vision complete:", visionAnalysis.length, "chars");
-        
-        // Generate proper filename for GitHub structure
-        const txtFilename = imageName ? imageName.replace(/\.(png|jpg|jpeg|webp)$/i, '.txt') : 'vision-analysis.txt';
-        
-        return {
-          statusCode: 200,
-          headers: { 
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
-          },
-          body: JSON.stringify({
-            visionAnalysis,
-            cached: false,
-            shouldDownload: true,
-            downloadFilename: txtFilename,
-            githubPath: `visuals/${taskType}/${txtFilename}`, // Include full path for reference
-          }),
-        };
-
-      } catch (error) {
-        console.error("❌ Vision preload error:", error.message);
-        console.error("Error stack:", error.stack);
-        return {
-          statusCode: 200,
-          headers: { 
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
-          },
-          body: JSON.stringify({
-            error: true,
-            message: `Vision analysis failed: ${error.message}`,
-            details: error.stack ? error.stack.substring(0, 500) : 'No stack trace'
-          }),
-        };
-      }
-    }
 
     // REGULAR FEEDBACK REQUEST
     let feedback = "";
@@ -220,7 +44,7 @@ Be specific about POSITIONS - use compass directions, relative distances, groupi
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: "gpt-5",
         messages: [
           { role: "system", content: "IELTS Writing Task 1 examiner." },
           { role: "user", content: feedbackPrompt },
@@ -243,7 +67,7 @@ Be specific about POSITIONS - use compass directions, relative distances, groupi
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "gpt-4o-mini",
+            model: "gpt-5",
             messages: [
               { role: "system", content: "Convert to ASCII table with | borders." },
               { role: "user", content: `ASCII table only:\n\n${content}` },
@@ -256,93 +80,79 @@ Be specific about POSITIONS - use compass directions, relative distances, groupi
         console.log("✅ ASCII done");
 
       } else if (taskType === "maps" || taskType === "flowchart") {
-        // USE PRELOADED VISION ANALYSIS
-        console.log(`🗺️ Map SVG (using ${cachedVisionAnalysis ? 'preloaded' : 'no'} analysis)`);
+        // NEW APPROACH: Direct SVG generation from description
+        console.log(`🎨 Direct SVG generation for ${taskType}`);
         
-        if (!cachedVisionAnalysis) {
-          console.error("❌ No preloaded Vision analysis provided");
-          // Return error but with feedback still intact
-          return {
-            statusCode: 200,
-            headers: { 
-              "Content-Type": "application/json",
-              "Access-Control-Allow-Origin": "*"
-            },
-            body: JSON.stringify({
-              feedback,
-              error: true,
-              message: "Vision analysis not loaded. Please reload the image.",
-            }),
-          };
-        }
-
         try {
-          // Generate SVG using preloaded analysis
-          console.log("🎨 Generating SVG...");
+          const svgPrompt = `You are an SVG diagram generator for IELTS Task 1 practice.
 
-          const svgPrompt = `Create an ACCURATE SVG that matches BOTH the Vision analysis AND the student's description:
-
-IMAGE ANALYSIS (Technical details):
-${cachedVisionAnalysis}
-
-STUDENT DESCRIPTION (Spatial structure - FOLLOW THIS):
+STUDENT'S DESCRIPTION:
 ${content}
 
-CRITICAL: Extract spatial information from STUDENT DESCRIPTION first:
-1. Parse phrases like "two main areas", "near the beach", "eastern part", "central area", "southern tip"
-2. Count features mentioned (e.g., "several huts" might mean 6-12)
-3. Identify spatial relationships (e.g., "one near X and another near Y" = TWO clusters)
-4. Use student's structure as PRIMARY guide for positioning
+TASK: Create an accurate SVG visualization that represents what the student described.
 
-REQUIREMENTS:
-1. **Spatial positioning from student description:**
-   - "two main areas" = Create TWO distinct separated clusters, NOT one continuous line
-   - "near the beach" / "western" = Position on LEFT side near beach edge
-   - "eastern part" = Position on RIGHT side of island
-   - "central area" = Position in CENTER of island
-   - "southern" / "south" = Position at BOTTOM edge
-   
-2. **Use emoji/Unicode symbols** for visual elements:
-   - Trees: 🌴
-   - Huts/accommodation: 🏠 
-   - Reception: 🏢
+CRITICAL INSTRUCTIONS:
+1. **Parse the description carefully:**
+   - If they mention "before and after", create TWO side-by-side diagrams
+   - If they mention "two main areas", create TWO distinct clusters
+   - Extract all spatial information (north, south, east, west, central, near X, etc.)
+   - Count features mentioned (several = 5-7, many = 10+)
+
+2. **Use emoji/Unicode for features:**
+   - Trees/palms: 🌴
+   - Small buildings/huts: 🏠
+   - Large buildings: 🏢
+   - Reception: 🏛️
    - Restaurant: 🍽️
-   - Pier: Brown rectangle (#8B4513)
-   - Paths: Dashed lines (stroke-dasharray)
-   - Boats: ⛵ (if mentioned)
-   
-3. **Layout structure:**
-   - Before map: viewBox top half (y: 0-340)
-   - After map: viewBox bottom half (y: 360-700)
-   - Island: Elongated oval shape
-   - Water: #4A90E2 (surrounds island)
-   - Beach: #F5DEB3 (where student describes it)
-   - Land: #90EE90
+   - Boats: ⛵
+   - Paths: Dashed lines
 
-4. **Match student's descriptions:**
-   - If student says "several", show 6-8 items
-   - If student says "many", show 12+ items
-   - If student describes arrangement (e.g., "in a row", "in a circle"), follow that pattern
-   - If student says "connected by", draw paths/tracks between those features
+3. **SVG structure for before/after:**
+   <svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
+     <!-- Before (top half) -->
+     <g id="before">
+       <text x="500" y="30" font-size="24" font-weight="bold" text-anchor="middle">Before</text>
+       <rect x="50" y="50" width="900" height="300" fill="#87CEEB" rx="20"/>
+       <ellipse cx="500" cy="200" rx="400" ry="130" fill="#90EE90"/>
+       <!-- Features here -->
+     </g>
+     
+     <!-- After (bottom half) -->
+     <g id="after">
+       <text x="500" y="380" font-size="24" font-weight="bold" text-anchor="middle">After</text>
+       <rect x="50" y="400" width="900" height="300" fill="#87CEEB" rx="20"/>
+       <ellipse cx="500" cy="550" rx="400" ry="130" fill="#90EE90"/>
+       <!-- Features here -->
+     </g>
+   </svg>
 
-5. **Visual hierarchy:**
-   - Make features mentioned multiple times slightly larger
-   - Central/important features (reception, restaurant) should be prominent
-   - Use size to show importance: 🏢 (bigger) vs 🏠 (smaller)
+4. **Positioning rules:**
+   - "near beach" / "western" → x: 100-300
+   - "central" → x: 400-600
+   - "eastern" → x: 700-900
+   - "northern" → y: 80-150 (before) or 430-500 (after)
+   - "southern" → y: 250-290 (before) or 600-640 (after)
 
-EXAMPLE SPATIAL PARSING:
-"Several huts in two main areas — one near the beach and another in the eastern part"
-→ Create TWO separate hut clusters:
-   Cluster 1: 5-6 huts at x:200-350, y:600-650 (western/beach side)
-   Cluster 2: 5-6 huts at x:650-750, y:600-650 (eastern side)
+5. **Clustering:**
+   If description says "two areas", create TWO visibly separated groups:
+   - Group 1: Cluster elements close together (30-50px spacing)
+   - Gap: Leave 150-250px between groups
+   - Group 2: Cluster elements close together
 
-"Reception and restaurant in the central area"
-→ Position both in center: x:450-500, y:580-620
+6. **Colors:**
+   - Water: #87CEEB (light blue)
+   - Land: #90EE90 (light green)
+   - Beach/sand: #F5DEB3 (wheat)
+   - Paths: #8B4513 (brown) with stroke-dasharray="5,5"
+   - Pier: #654321 (dark brown)
 
-"Pier in the south"  
-→ Position at bottom: x:400-450, y:720-770
+7. **Size hierarchy:**
+   - Important/central buildings: font-size="30"
+   - Regular buildings/huts: font-size="24"
+   - Trees: font-size="20"
+   - Boats: font-size="18"
 
-Output ONLY the complete SVG code with NO markdown formatting.`;
+RESPOND ONLY WITH VALID SVG CODE. NO MARKDOWN. NO EXPLANATIONS.`;
 
           const svgRes = await fetch("https://api.openai.com/v1/chat/completions", {
             method: "POST",
@@ -351,27 +161,28 @@ Output ONLY the complete SVG code with NO markdown formatting.`;
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              model: "gpt-4o",
+              model: "gpt-5", // Use latest GPT-4o for best SVG generation
               messages: [
                 { 
                   role: "system", 
-                  content: "Create accurate SVG. Output only SVG code, no markdown." 
+                  content: "You are an expert SVG generator. Output only valid SVG code with no markdown formatting." 
                 },
                 { role: "user", content: svgPrompt },
               ],
-              temperature: 0.2,
-              max_tokens: 3500,
+              temperature: 0.1,
+              max_tokens: 4000,
             }),
           });
 
           if (!svgRes.ok) {
-            throw new Error(`SVG error: ${svgRes.status}`);
+            const errorText = await svgRes.text();
+            throw new Error(`SVG generation error: ${svgRes.status} - ${errorText}`);
           }
 
           const svgData = await svgRes.json();
           let svgCode = svgData.choices?.[0]?.message?.content?.trim() || "";
           
-          // Clean
+          // Clean markdown formatting
           svgCode = svgCode
             .replace(/```svg\s*/gi, '')
             .replace(/```xml\s*/gi, '')
@@ -380,6 +191,7 @@ Output ONLY the complete SVG code with NO markdown formatting.`;
             .replace(/(<\/svg>)[^>]*$/i, '$1')
             .trim();
 
+          // Extract SVG
           const svgMatch = svgCode.match(/<svg[\s\S]*?<\/svg>/i);
           if (svgMatch) {
             svgCode = svgMatch[0];
@@ -388,10 +200,12 @@ Output ONLY the complete SVG code with NO markdown formatting.`;
           if (svgCode.startsWith('<svg') && svgCode.includes('</svg>')) {
             generatedSvg = svgCode;
             console.log("✅ SVG generated:", svgCode.length, "chars");
+          } else {
+            console.error("❌ Invalid SVG generated");
           }
 
         } catch (error) {
-          console.error("❌ SVG error:", error.message);
+          console.error("❌ SVG generation error:", error.message);
         }
 
       } else {
@@ -416,7 +230,7 @@ Requirements:
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "gpt-4o",
+            model: "gpt-5",
             messages: [
               { role: "system", content: "Generate Python code only." },
               { role: "user", content: codeGenPrompt },
@@ -507,7 +321,10 @@ if fig.get_axes():
     
     return {
       statusCode: 200,
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*"
+      },
       body: JSON.stringify({
         error: true,
         feedback: "An error occurred. Please try again.",
