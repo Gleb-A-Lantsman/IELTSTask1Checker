@@ -390,64 +390,64 @@
         const feedbackButton = document.getElementById('feedback-button');
 
         let currentImageUrl = '';
+        let currentImageName = ''; // ← ADDED for Vision caching
         let currentCategory = '';
         let availableImages = {};
         let isLoading = false;
         let typingTimer;
         const doneTypingInterval = 30000;
 
-        // API endpoint - UPDATE THIS to your Netlify URL
+        // API endpoint
         const API_BASE = 'https://ubiquitous-malasada.netlify.app/.netlify/functions';
 
-// Load available images when category changes
-categorySelect.addEventListener('change', async () => {
-  const category = categorySelect.value;
-  if (!category) {
-    imageSelectorContainer.style.display = 'none';
-    return;
-  }
+        // Load available images when category changes
+        categorySelect.addEventListener('change', async () => {
+          const category = categorySelect.value;
+          if (!category) {
+            imageSelectorContainer.style.display = 'none';
+            return;
+          }
 
-  currentCategory = category;
-  imageSelect.innerHTML = '<option value="">-- Loading images from GitHub... --</option>';
-  imageSelectorContainer.style.display = 'block';
+          currentCategory = category;
+          imageSelect.innerHTML = '<option value="">-- Loading images from GitHub... --</option>';
+          imageSelectorContainer.style.display = 'block';
 
-  try {
-    const owner = "Gleb-A-Lantsman";
-    const repo = "IELTSTask1Checker";
-    const visualsPath = `visuals/${category}`;
-    const githubApiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${visualsPath}`;
+          try {
+            const owner = "Gleb-A-Lantsman";
+            const repo = "IELTSTask1Checker";
+            const visualsPath = `visuals/${category}`;
+            const githubApiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${visualsPath}`;
 
-    const response = await fetch(githubApiUrl);
-    if (!response.ok) throw new Error(`GitHub fetch failed: ${response.status}`);
-    const files = await response.json();
+            const response = await fetch(githubApiUrl);
+            if (!response.ok) throw new Error(`GitHub fetch failed: ${response.status}`);
+            const files = await response.json();
 
-    // Filter only valid image files
-    const imageFiles = files.filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f.name));
+            // Filter only valid image files
+            const imageFiles = files.filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f.name));
 
-    if (imageFiles.length === 0) {
-      imageSelect.innerHTML = '<option value="">-- No images found in this category --</option>';
-      return;
-    }
+            if (imageFiles.length === 0) {
+              imageSelect.innerHTML = '<option value="">-- No images found in this category --</option>';
+              return;
+            }
 
-    // Store them locally and build dropdown
-    availableImages[category] = imageFiles;
-    imageSelect.innerHTML = '<option value="">-- Choose an image --</option>';
+            // Store them locally and build dropdown
+            availableImages[category] = imageFiles;
+            imageSelect.innerHTML = '<option value="">-- Choose an image --</option>';
 
-    imageFiles.forEach((img, index) => {
-      const option = document.createElement('option');
-      option.value = index;
-      option.textContent = img.name;
-      imageSelect.appendChild(option);
-    });
+            imageFiles.forEach((img, index) => {
+              const option = document.createElement('option');
+              option.value = index;
+              option.textContent = img.name;
+              imageSelect.appendChild(option);
+            });
 
-    imageSelectorContainer.style.display = 'block';
-  } catch (error) {
-    console.error('Error fetching from GitHub:', error);
-    imageSelect.innerHTML = '<option value="">-- Error loading images --</option>';
-    showError('⚠️ Failed to fetch images from GitHub repository.');
-  }
-});
-
+            imageSelectorContainer.style.display = 'block';
+          } catch (error) {
+            console.error('Error fetching from GitHub:', error);
+            imageSelect.innerHTML = '<option value="">-- Error loading images --</option>';
+            showError('⚠️ Failed to fetch images from GitHub repository.');
+          }
+        });
 
         // Load selected image
         loadImageBtn.addEventListener('click', () => {
@@ -457,32 +457,33 @@ categorySelect.addEventListener('change', async () => {
           }
 
           const image = availableImages[currentCategory][imageIndex];
-          loadImage(image.download_url);
+          loadImage(image.download_url, image.name); // ← UPDATED: Pass filename
         });
 
         // Load random image
-randomImageBtn.addEventListener('click', () => {
-  const category = categorySelect.value;
-  if (!category) {
-    alert('Please select a category first');
-    return;
-  }
+        randomImageBtn.addEventListener('click', () => {
+          const category = categorySelect.value;
+          if (!category) {
+            alert('Please select a category first');
+            return;
+          }
 
-  const images = availableImages[category];
-  if (!images || images.length === 0) {
-    alert('No images loaded for this category yet.');
-    return;
-  }
+          const images = availableImages[category];
+          if (!images || images.length === 0) {
+            alert('No images loaded for this category yet.');
+            return;
+          }
 
-  const randomIndex = Math.floor(Math.random() * images.length);
-  const image = images[randomIndex];
-  imageSelect.value = randomIndex;
-  loadImage(image.download_url);
-});
+          const randomIndex = Math.floor(Math.random() * images.length);
+          const image = images[randomIndex];
+          imageSelect.value = randomIndex;
+          loadImage(image.download_url, image.name); // ← UPDATED: Pass filename
+        });
 
-
-        function loadImage(url) {
+        // ← UPDATED: Accept fileName parameter
+        function loadImage(url, fileName) {
           currentImageUrl = url;
+          currentImageName = fileName; // ← ADDED: Track filename for caching
           taskImageContainer.innerHTML = `<img src="${url}" alt="Task 1 visual">`;
           imageInstructions.style.display = 'block';
           comparisonContainer.style.display = 'none';
@@ -545,6 +546,7 @@ randomImageBtn.addEventListener('click', () => {
           }
         });
 
+        // ← UPDATED: Send imageName to backend for caching
         async function requestFeedback(type) {
           if (isLoading) return;
           
@@ -572,7 +574,8 @@ randomImageBtn.addEventListener('click', () => {
               content,
               requestType: type,
               taskType: currentCategory,
-              imageUrl: currentImageUrl
+              imageUrl: currentImageUrl,
+              imageName: currentImageName // ← ADDED: Send filename for caching
             };
 
             const response = await fetch(`${API_BASE}/openai-proxy-task1`, {
@@ -588,8 +591,16 @@ randomImageBtn.addEventListener('click', () => {
               return;
             }
 
+            // ← ADDED: Log Vision analysis for manual caching
+            if (data.visionAnalysisForCaching && currentImageName) {
+              console.log("=== VISION ANALYSIS FOR CACHING ===");
+              console.log(`Save this to: visuals/${currentCategory}/${currentImageName.replace(/\.(png|jpg|jpeg|webp)$/i, '.txt')}`);
+              console.log(data.visionAnalysisForCaching);
+              console.log("=== END VISION ANALYSIS ===");
+            }
+
             if (type === 'full-feedback') {
-              displayFullFeedback(data);  // ✅ FIXED: Was "(data)" - typo!
+              displayFullFeedback(data);
             } else {
               feedbackContainer.innerHTML = formatHelpFeedback(data.feedback);
             }
@@ -601,85 +612,85 @@ randomImageBtn.addEventListener('click', () => {
           }
         }
 
-function displayFullFeedback(data) {
-  // Display text feedback
-  feedbackContainer.innerHTML = formatFullFeedback(data.feedback);
+        function displayFullFeedback(data) {
+          // Display text feedback
+          feedbackContainer.innerHTML = formatFullFeedback(data.feedback);
 
-  // Reset comparison area
-  comparisonContainer.innerHTML = "";
-  comparisonContainer.style.display = "block";
+          // Reset comparison area
+          comparisonContainer.innerHTML = "";
+          comparisonContainer.style.display = "block";
 
-  // Case 1: ASCII table
-  if (data.asciiTable) {
-    comparisonContainer.innerHTML = `
-      <div class="comparison-container">
-        <div class="comparison-side">
-          <h5>📊 Original Task Image</h5>
-          <img src="${currentImageUrl}" alt="Original task image">
-        </div>
-        <div class="comparison-side">
-          <h5>🧮 AI ASCII Table from Your Description</h5>
-          <pre style="background:#fafafa; padding:15px; border-radius:4px; border:1px solid #ddd; font-family:monospace; overflow-x:auto;">
+          // Case 1: ASCII table
+          if (data.asciiTable) {
+            comparisonContainer.innerHTML = `
+              <div class="comparison-container">
+                <div class="comparison-side">
+                  <h5>📊 Original Task Image</h5>
+                  <img src="${currentImageUrl}" alt="Original task image">
+                </div>
+                <div class="comparison-side">
+                  <h5>🧮 AI ASCII Table from Your Description</h5>
+                  <pre style="background:#fafafa; padding:15px; border-radius:4px; border:1px solid #ddd; font-family:monospace; overflow-x:auto;">
 ${data.asciiTable}
-          </pre>
-        </div>
-      </div>
-    `;
-    return;
-  }
+                  </pre>
+                </div>
+              </div>
+            `;
+            return;
+          }
 
-  // Case 2: SVG visualization
-  if (data.generatedSvg) {
-    comparisonContainer.innerHTML = `
-      <div class="comparison-container">
-        <div class="comparison-side">
-          <h5>🗺️ Original Task Image</h5>
-          <img src="${currentImageUrl}" alt="Original task image" style="max-width: 100%; height: auto; border-radius: 4px;">
-        </div>
-        <div class="comparison-side">
-          <h5>🎨 SVG Visualization of Your Description</h5>
-          <div style="
-            background: white; 
-            padding: 15px; 
-            border-radius: 4px; 
-            border: 2px solid #ddd; 
-            overflow: auto;
-            min-height: 400px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-          ">
-            ${data.generatedSvg}
-          </div>
-          <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
-            Vector illustration generated from your description using SVG.
-          </p>
-        </div>
-      </div>
-    `;
-    return;
-  }
+          // Case 2: SVG visualization
+          if (data.generatedSvg) {
+            comparisonContainer.innerHTML = `
+              <div class="comparison-container">
+                <div class="comparison-side">
+                  <h5>🗺️ Original Task Image</h5>
+                  <img src="${currentImageUrl}" alt="Original task image" style="max-width: 100%; height: auto; border-radius: 4px;">
+                </div>
+                <div class="comparison-side">
+                  <h5>🎨 SVG Visualization of Your Description</h5>
+                  <div style="
+                    background: white; 
+                    padding: 15px; 
+                    border-radius: 4px; 
+                    border: 2px solid #ddd; 
+                    overflow: auto;
+                    min-height: 400px;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                  ">
+                    ${data.generatedSvg}
+                  </div>
+                  <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
+                    Vector illustration generated from your description using SVG.
+                  </p>
+                </div>
+              </div>
+            `;
+            return;
+          }
 
-  // Case 3: Matplotlib chart
-  if (data.generatedImageBase64) {
-    comparisonContainer.innerHTML = `
-      <div class="comparison-container">
-        <div class="comparison-side">
-          <h5>📊 Original Task Image</h5>
-          <img src="${currentImageUrl}" alt="Original task image" style="max-width: 100%; height: auto;">
-        </div>
-        <div class="comparison-side">
-          <h5>🐍 Python Visualization of Your Description</h5>
-          <img src="${data.generatedImageBase64}" alt="Generated Python chart" style="max-width: 100%; height: auto; border-radius: 4px;">
-          <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
-            Chart generated using Python (Matplotlib + Pandas) based on your description.
-          </p>
-        </div>
-      </div>
-    `;
-    return;
-  }
-}
+          // Case 3: Matplotlib chart
+          if (data.generatedImageBase64) {
+            comparisonContainer.innerHTML = `
+              <div class="comparison-container">
+                <div class="comparison-side">
+                  <h5>📊 Original Task Image</h5>
+                  <img src="${currentImageUrl}" alt="Original task image" style="max-width: 100%; height: auto;">
+                </div>
+                <div class="comparison-side">
+                  <h5>🐍 Python Visualization of Your Description</h5>
+                  <img src="${data.generatedImageBase64}" alt="Generated Python chart" style="max-width: 100%; height: auto; border-radius: 4px;">
+                  <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
+                    Chart generated using Python (Matplotlib + Pandas) based on your description.
+                  </p>
+                </div>
+              </div>
+            `;
+            return;
+          }
+        }
 
         function formatFullFeedback(fb) {
           const text = fb.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
