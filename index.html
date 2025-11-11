@@ -789,81 +789,175 @@
           }
         });
 
-        async function requestFeedback(type) {
-          if (isLoading) return;
-          
-          isLoading = true;
-          const content = essayTextarea.value;
-          
-          const titles = {
-            'help': 'Writing Help',
-            'full-feedback': 'Complete Feedback & Visual Comparison'
-          };
+       async function requestFeedback(type) {
+  if (isLoading) return;
+  isLoading = true;
 
-          feedbackContainer.innerHTML = `<h4>${titles[type]}</h4>`;
-          
-          // Show progress bar only for full-feedback
-          let progressInterval = null;
-          if (type === 'full-feedback') {
-            progressInterval = showProgressBar(currentCategory);
-          } else {
-            feedbackContainer.innerHTML += `<p>Analyzing your description...</p>`;
-          }
+  const content = essayTextarea.value;
 
-          try {
-            const body = {
-              content,
-              requestType: type,
-              taskType: currentCategory,
-              imageUrl: currentImageUrl,
-              imageName: currentImageName
-            };
+  if (currentCategory === "maps" && type === "full-feedback") {
+    console.log("🗺️ Using Batch Jobs for MAPS");
 
-            // Create AbortController for timeout
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 90000); // 90 seconds timeout
+    // -----------------------------------------------------
+    // 1) Submit job
+    // -----------------------------------------------------
+    let submitRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        phase: "submit",
+        requestType: type,
+        taskType: currentCategory,
+        content
+      })
+    });
 
-            const response = await fetch(`${API_BASE}/openai-proxy-task1`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(body),
-              signal: controller.signal
-            });
+    let submitData = await submitRes.json();
+    let job_id = submitData.job_id;
 
-            clearTimeout(timeoutId);
+    console.log("✅ Job submitted:", job_id);
 
-            const data = await response.json();
+    // Show placeholder feedback immediately
+    feedbackContainer.innerHTML = `
+      <h4>Complete Feedback</h4>
+      <p>Generating map visualization…</p>
+    `;
 
-            if (data.error) {
-              const errorMsg = data.message || data.feedback || 'Error generating feedback';
-              feedbackContainer.innerHTML = `<h4>${titles[type]}</h4><p class="error-message">${errorMsg}</p>`;
-              if (progressInterval) hideProgressBar(progressInterval);
-              return;
-            }
+    let svg = null;
 
-            // Hide progress bar before showing results
-            if (progressInterval) hideProgressBar(progressInterval);
+    // -----------------------------------------------------
+    // 2) Poll every 2 seconds
+    // -----------------------------------------------------
+    while (!svg) {
+      await new Promise(r => setTimeout(r, 2000));
 
-            if (type === 'full-feedback') {
-              displayFullFeedback(data);
-            } else {
-              feedbackContainer.innerHTML = formatHelpFeedback(data.feedback);
-            }
-          } catch (error) {
-            console.error('Error:', error);
-            
-            if (progressInterval) hideProgressBar(progressInterval);
-            
-            let errorMessage = 'Unable to generate feedback. Please try again.';
-            if (error.name === 'AbortError') {
-              errorMessage = 'Request timed out after 90 seconds. The visualization may be too complex. Please try a simpler description or try again.';
-            }
-            
-            feedbackContainer.innerHTML = `<h4>${titles[type]}</h4><p class="error-message">${errorMessage}</p>`;
-          } finally {
-            isLoading = false;
-          }
-        }
+      let pollRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phase: "poll",
+          requestType: type,
+          taskType: currentCategory,
+          job_id
+        })
+      });
+
+      let pollData = await pollRes.json();
+
+      if (pollData.status === "completed") {
+        svg = pollData.generatedSvg;
+      } else {
+        console.log("⏳ Waiting…", pollData.status);
+      }
+    }
+
+    console.log("✅ SVG received");
+
+    // Feedback
+    const fbRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        requestType: "help", // already computed earlier in pipeline
+        content
+      })
+    });
+
+    const fbData = await fbRes.json();
+    feedbackContainer.innerHTML = formatFullFeedback(fbData.feedback);
+
+    // -----------------------------------------------------
+    // Display comparison
+    // -----------------------------------------------------
+    comparisonContainer.style.display = "block";
+    comparisonContainer.innerHTML = `
+      <div class="comparison-container">
+        <div class="comparison-side">
+          <h5>Original Task Image</h5>
+          <img src="${currentImageUrl}">
+        </div>
+
+        <div class="comparison-side">
+          <h5>Your Description → SVG</h5>
+          <div style="
+              background:white;
+              padding: 10px;
+              border-radius: 8px;
+              border: 1px solid #ccc;
+              overflow:auto;
+            ">
+            ${svg}
+          </div>
+        </div>
+      </div>
+    `;
+
+    isLoading = false;
+    return;
+  }
+
+// -----------------------------------------------------
+  // ✅ NON-MAPS → fall back to original full-feedback logic
+  // -----------------------------------------------------
+  if (type === 'full-feedback') {
+    // Use progress bar for non-map types
+    let progressInterval = showProgressBar(currentCategory);
+
+    try {
+      const res = await fetch(`${API_BASE}/openai-proxy-task1`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content,
+          requestType: type,
+          taskType: currentCategory,
+          imageUrl: currentImageUrl,
+          imageName: currentImageName
+        })
+      });
+
+      const data = await res.json();
+
+      hideProgressBar(progressInterval);
+
+      if (data.error) {
+        feedbackContainer.innerHTML = `<h4>Complete Feedback</h4><p class="error-message">${data.message || 'Error generating feedback'}</p>`;
+        return;
+      }
+
+      displayFullFeedback(data);
+      isLoading = false;
+      return;
+
+    } catch (err) {
+      hideProgressBar(progressInterval);
+      feedbackContainer.innerHTML = `<h4>Complete Feedback</h4><p class="error-message">An error occurred. Please try again.</p>`;
+      isLoading = false;
+      return;
+    }
+  }
+
+  // -----------------------------------------------------
+  // ✅ HELP REQUEST stays the same
+  // -----------------------------------------------------
+  if (type === 'help') {
+    const res = await fetch(`${API_BASE}/openai-proxy-task1`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content,
+        requestType: type,
+        taskType: currentCategory
+      })
+    });
+
+    const data = await res.json();
+    feedbackContainer.innerHTML = formatHelpFeedback(data.feedback);
+    isLoading = false;
+    return;
+  }
+}
+
 
         function displayFullFeedback(data) {
           // Display text feedback
