@@ -104,10 +104,9 @@ Style requirements:
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              model: "dall-e-3",
+              model: "dall-e-2", // Faster than dall-e-3 (5-10s vs 15-30s)
               prompt: dallePrompt,
-              size: "1024x1024",
-              quality: "standard",
+              size: "512x512", // Smaller = faster
               n: 1,
               response_format: "b64_json"
             }),
