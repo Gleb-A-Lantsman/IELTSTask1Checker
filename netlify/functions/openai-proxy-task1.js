@@ -1,10 +1,10 @@
-// OPTIMIZED VERSION - Faster Vision API processing
+// CACHED VISION VERSION - Store Vision analysis for reuse
 
 const { Sandbox } = require('@e2b/code-interpreter');
 
 exports.handler = async (event) => {
   try {
-    const { content, requestType, taskType, imageUrl } = JSON.parse(event.body || "{}");
+    const { content, requestType, taskType, imageUrl, imageName } = JSON.parse(event.body || "{}");
 
     if (!content || !requestType) {
       return {
@@ -14,14 +14,15 @@ exports.handler = async (event) => {
       };
     }
 
-    console.log(`📩 ${requestType} | ${taskType}`);
+    console.log(`📩 ${requestType} | ${taskType} | ${imageName || 'no-name'}`);
 
     let feedback = "";
     let asciiTable = null;
     let generatedImageBase64 = null;
     let generatedSvg = null;
+    let visionAnalysis = null;
 
-    // STEP 1: Feedback
+    // STEP 1: Feedback (always fast)
     const feedbackPrompt =
       requestType === "help"
         ? `IELTS examiner: Give short hints (< 150 words) for:\n\n${content}`
@@ -70,15 +71,42 @@ exports.handler = async (event) => {
         console.log("✅ ASCII done");
 
       } else if (taskType === "maps" || taskType === "flowchart") {
-        // OPTIMIZED VISION-ENHANCED SVG
-        console.log(`🔍 Fast Vision-enhanced SVG`);
+        // VISION WITH CACHING
+        console.log(`🗺️ Map visualization`);
         
         try {
-          // STEP 2A: FASTER Vision Analysis
-          console.log("👁️ Quick Vision analysis...");
-          
-          // SHORTER, FOCUSED PROMPT - saves 3-5 seconds
-          const visionPrompt = `Analyze this IELTS map briefly:
+          // STEP 2A: Try to load cached Vision analysis from GitHub
+          if (imageName) {
+            const visionFileName = imageName.replace(/\.(png|jpg|jpeg|webp)$/i, '.txt');
+            const owner = "Gleb-A-Lantsman";
+            const repo = "IELTSTask1Checker";
+            const visionPath = `visuals/${taskType}/${visionFileName}`;
+            const visionUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${visionPath}`;
+            
+            console.log(`📂 Checking for cached analysis: ${visionFileName}`);
+            
+            try {
+              const cacheResponse = await fetch(visionUrl);
+              
+              if (cacheResponse.ok) {
+                const cacheData = await cacheResponse.json();
+                // Decode base64 content
+                visionAnalysis = Buffer.from(cacheData.content, 'base64').toString('utf-8');
+                console.log("✅ Loaded cached Vision analysis");
+                console.log("📋 Cached analysis preview:", visionAnalysis.substring(0, 150));
+              } else {
+                console.log("⚠️ No cached analysis found, will use Vision API");
+              }
+            } catch (cacheError) {
+              console.log("⚠️ Cache check failed, will use Vision API");
+            }
+          }
+
+          // STEP 2B: If no cache, use Vision API
+          if (!visionAnalysis) {
+            console.log("👁️ Running Vision API analysis...");
+            
+            const visionPrompt = `Analyze this IELTS map briefly:
 
 1. Structure: before/after or single view?
 2. Count each feature type (trees, huts, buildings)
@@ -87,52 +115,53 @@ exports.handler = async (event) => {
 
 Be concise - just the facts needed for visualization.`;
 
-          const visionRes = await fetch("https://api.openai.com/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "gpt-4o",
-              messages: [
-                {
-                  role: "user",
-                  content: [
-                    { type: "text", text: visionPrompt },
-                    { 
-                      type: "image_url", 
-                      image_url: { 
-                        url: imageUrl,
-                        detail: "low" // FASTER - saves 2-3 seconds
+            const visionRes = await fetch("https://api.openai.com/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: "gpt-4o",
+                messages: [
+                  {
+                    role: "user",
+                    content: [
+                      { type: "text", text: visionPrompt },
+                      { 
+                        type: "image_url", 
+                        image_url: { 
+                          url: imageUrl,
+                          detail: "low"
+                        }
                       }
-                    }
-                  ]
-                }
-              ],
-              max_tokens: 600, // REDUCED from 1500 - saves time
-              temperature: 0.1, // Lower for faster, more focused output
-            }),
-          });
+                    ]
+                  }
+                ],
+                max_tokens: 600,
+                temperature: 0.1,
+              }),
+            });
 
-          if (!visionRes.ok) {
-            throw new Error(`Vision API error: ${visionRes.status}`);
+            if (!visionRes.ok) {
+              throw new Error(`Vision API error: ${visionRes.status}`);
+            }
+
+            const visionData = await visionRes.json();
+            visionAnalysis = visionData.choices?.[0]?.message?.content?.trim() || "";
+            
+            console.log("✅ Vision analysis complete");
+            console.log("📋 New analysis preview:", visionAnalysis.substring(0, 150));
+            console.log("💡 Note: Save this analysis to a .txt file in your GitHub repo for caching!");
           }
 
-          const visionData = await visionRes.json();
-          const imageAnalysis = visionData.choices?.[0]?.message?.content?.trim() || "";
-          
-          console.log("✅ Vision done");
-          console.log("📋 Analysis:", imageAnalysis.substring(0, 150));
+          // STEP 2C: Generate SVG using Vision analysis
+          console.log("🎨 Generating SVG from analysis...");
 
-          // STEP 2B: FASTER SVG Generation
-          console.log("🎨 Generating SVG...");
-
-          // STREAMLINED PROMPT - saves 2-3 seconds
           const svgPrompt = `Create accurate SVG from this analysis:
 
 IMAGE ANALYSIS:
-${imageAnalysis}
+${visionAnalysis}
 
 STUDENT DESCRIPTION:
 ${content}
@@ -176,7 +205,7 @@ Match the analysis feature counts. Output ONLY SVG code.`;
                 { role: "user", content: svgPrompt },
               ],
               temperature: 0.2,
-              max_tokens: 2500, // REDUCED from 3000
+              max_tokens: 2500,
             }),
           });
 
@@ -207,13 +236,13 @@ Match the analysis feature counts. Output ONLY SVG code.`;
           // Validate
           if (svgCode.startsWith('<svg') && svgCode.includes('</svg>')) {
             generatedSvg = svgCode;
-            console.log("✅ Vision-enhanced SVG:", svgCode.length, "chars");
+            console.log("✅ SVG generated:", svgCode.length, "chars");
           } else {
             console.error("❌ Invalid SVG");
           }
 
-        } catch (visionError) {
-          console.error("❌ Vision error:", visionError.message);
+        } catch (error) {
+          console.error("❌ Map visualization error:", error.message);
         }
 
       } else {
@@ -259,7 +288,7 @@ Requirements:
         try {
           const sandbox = await Sandbox.create({
             apiKey: process.env.E2B_API_KEY,
-            timeoutMs: 20000 // Reduced
+            timeoutMs: 20000
           });
 
           const execution = await sandbox.runCode(pythonCode);
@@ -321,6 +350,7 @@ if fig.get_axes():
         asciiTable,
         generatedImageBase64,
         generatedSvg,
+        visionAnalysisForCaching: visionAnalysis, // Return analysis so you can save it
       }),
     };
 
