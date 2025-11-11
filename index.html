@@ -315,6 +315,55 @@
         color: #004085;
         border: 1px solid #b8daff;
       }
+
+      /* Progress bar */
+      .progress-container {
+        margin: 20px 0;
+        padding: 15px;
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        display: none;
+      }
+
+      .progress-container.active {
+        display: block;
+      }
+
+      .progress-label {
+        font-size: 14px;
+        color: #495057;
+        margin-bottom: 8px;
+        font-weight: 500;
+      }
+
+      .progress-bar-bg {
+        width: 100%;
+        height: 24px;
+        background-color: #e9ecef;
+        border-radius: 12px;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .progress-bar-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #0066cc, #4a90e2);
+        border-radius: 12px;
+        transition: width 0.3s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 12px;
+        font-weight: bold;
+      }
+
+      .progress-time {
+        font-size: 12px;
+        color: #6c757d;
+        margin-top: 5px;
+        text-align: right;
+      }
     </style>
   </head>
   <body>
@@ -390,6 +439,16 @@
       </div>
     </div>
 
+    <div id="progress-container" class="progress-container">
+      <div class="progress-label" id="progress-label">Generating visualization...</div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%">
+          <span id="progress-percent">0%</span>
+        </div>
+      </div>
+      <div class="progress-time" id="progress-time">Estimated time: 0s</div>
+    </div>
+
     <div id="feedback-container" class="feedback-container">
       <h4>Writing Feedback</h4>
       <p>
@@ -418,6 +477,13 @@
         const helpButton = document.getElementById('help-button');
         const feedbackButton = document.getElementById('feedback-button');
 
+        // Progress bar elements
+        const progressContainer = document.getElementById('progress-container');
+        const progressBarFill = document.getElementById('progress-bar-fill');
+        const progressPercent = document.getElementById('progress-percent');
+        const progressLabel = document.getElementById('progress-label');
+        const progressTime = document.getElementById('progress-time');
+
         let currentImageUrl = '';
         let currentImageName = '';
         let currentCategory = '';
@@ -428,6 +494,65 @@
 
         // API endpoint
         const API_BASE = 'https://ubiquitous-malasada.netlify.app/.netlify/functions';
+
+        // Progress bar functions
+        function showProgressBar(taskType) {
+          progressContainer.classList.add('active');
+          comparisonContainer.style.display = 'none';
+          
+          // Set expected time based on task type
+          let totalTime;
+          let label;
+          
+          if (taskType === 'maps' || taskType === 'flowchart') {
+            totalTime = 60; // 1 minute for maps
+            label = 'Generating map visualization...';
+          } else if (taskType === 'table') {
+            totalTime = 5; // 5 seconds for tables
+            label = 'Generating ASCII table...';
+          } else {
+            totalTime = 20; // 20 seconds for charts
+            label = 'Generating chart...';
+          }
+          
+          progressLabel.textContent = label;
+          progressTime.textContent = `Estimated time: ${totalTime}s`;
+          
+          // Animate progress bar
+          let elapsed = 0;
+          const interval = 100; // Update every 100ms
+          
+          const progressInterval = setInterval(() => {
+            elapsed += interval;
+            const percent = Math.min((elapsed / (totalTime * 1000)) * 100, 95);
+            progressBarFill.style.width = percent + '%';
+            progressPercent.textContent = Math.floor(percent) + '%';
+            
+            const remaining = Math.max(0, totalTime - Math.floor(elapsed / 1000));
+            progressTime.textContent = `Time remaining: ~${remaining}s`;
+            
+            if (elapsed >= totalTime * 1000) {
+              clearInterval(progressInterval);
+              progressLabel.textContent = 'Finishing up...';
+              progressBarFill.style.width = '95%';
+            }
+          }, interval);
+          
+          return progressInterval;
+        }
+        
+        function hideProgressBar(progressInterval) {
+          if (progressInterval) clearInterval(progressInterval);
+          progressBarFill.style.width = '100%';
+          progressPercent.textContent = '100%';
+          progressLabel.textContent = 'Complete!';
+          
+          setTimeout(() => {
+            progressContainer.classList.remove('active');
+            progressBarFill.style.width = '0%';
+            progressPercent.textContent = '0%';
+          }, 500);
+        }
 
         // Load available images when category changes
         categorySelect.addEventListener('change', async () => {
@@ -674,16 +799,15 @@
             'help': 'Writing Help',
             'full-feedback': 'Complete Feedback & Visual Comparison'
           };
-          
-          const msgs = {
-            'help': 'Analyzing your description...',
-            'full-feedback': 'Analyzing your description and generating comparison visual...'
-          };
 
-          feedbackContainer.innerHTML = `<h4>${titles[type]}</h4><p>${msgs[type]}</p>`;
+          feedbackContainer.innerHTML = `<h4>${titles[type]}</h4>`;
           
+          // Show progress bar only for full-feedback
+          let progressInterval = null;
           if (type === 'full-feedback') {
-            comparisonContainer.style.display = 'none';
+            progressInterval = showProgressBar(currentCategory);
+          } else {
+            feedbackContainer.innerHTML += `<p>Analyzing your description...</p>`;
           }
 
           try {
@@ -695,18 +819,30 @@
               imageName: currentImageName
             };
 
+            // Create AbortController for timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 90000); // 90 seconds timeout
+
             const response = await fetch(`${API_BASE}/openai-proxy-task1`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(body)
+              body: JSON.stringify(body),
+              signal: controller.signal
             });
+
+            clearTimeout(timeoutId);
 
             const data = await response.json();
 
             if (data.error) {
-              feedbackContainer.innerHTML = `<h4>${titles[type]}</h4><p class="error-message">${data.message || data.feedback || 'Error generating feedback'}</p>`;
+              const errorMsg = data.message || data.feedback || 'Error generating feedback';
+              feedbackContainer.innerHTML = `<h4>${titles[type]}</h4><p class="error-message">${errorMsg}</p>`;
+              if (progressInterval) hideProgressBar(progressInterval);
               return;
             }
+
+            // Hide progress bar before showing results
+            if (progressInterval) hideProgressBar(progressInterval);
 
             if (type === 'full-feedback') {
               displayFullFeedback(data);
@@ -715,7 +851,15 @@
             }
           } catch (error) {
             console.error('Error:', error);
-            feedbackContainer.innerHTML = `<h4>${titles[type]}</h4><p class="error-message">Unable to generate feedback. Please try again.</p>`;
+            
+            if (progressInterval) hideProgressBar(progressInterval);
+            
+            let errorMessage = 'Unable to generate feedback. Please try again.';
+            if (error.name === 'AbortError') {
+              errorMessage = 'Request timed out after 90 seconds. The visualization may be too complex. Please try a simpler description or try again.';
+            }
+            
+            feedbackContainer.innerHTML = `<h4>${titles[type]}</h4><p class="error-message">${errorMessage}</p>`;
           } finally {
             isLoading = false;
           }
