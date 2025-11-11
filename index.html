@@ -289,6 +289,32 @@
       .instructions li {
         margin: 5px 0;
       }
+
+      .vision-status {
+        margin-top: 10px;
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-size: 13px;
+        display: inline-block;
+      }
+
+      .vision-cached {
+        background-color: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+      }
+
+      .vision-loading {
+        background-color: #fff3cd;
+        color: #856404;
+        border: 1px solid #ffeaa7;
+      }
+
+      .vision-downloaded {
+        background-color: #cce5ff;
+        color: #004085;
+        border: 1px solid #b8daff;
+      }
     </style>
   </head>
   <body>
@@ -333,6 +359,8 @@
       <div class="task-image-container" id="task-image-container">
         <p class="placeholder-text">Select a category and load an image to begin</p>
       </div>
+
+      <div id="vision-status-container"></div>
 
       <div id="image-instructions" style="margin-top: 15px; padding: 10px; background-color: #fffbea; border-radius: 4px; display: none;">
         <strong>Task:</strong> Summarize the information by selecting and reporting the main features, and make comparisons where relevant. Write at least 150 words.
@@ -380,6 +408,7 @@
         const loadImageBtn = document.getElementById('load-image-btn');
         const randomImageBtn = document.getElementById('random-image-btn');
         const taskImageContainer = document.getElementById('task-image-container');
+        const visionStatusContainer = document.getElementById('vision-status-container');
         const imageInstructions = document.getElementById('image-instructions');
         const essayTextarea = document.getElementById('essay-input');
         const feedbackContainer = document.getElementById('feedback-container');
@@ -390,11 +419,12 @@
         const feedbackButton = document.getElementById('feedback-button');
 
         let currentImageUrl = '';
-        let currentImageName = ''; // ← ADDED for Vision caching
+        let currentImageName = '';
         let currentCategory = '';
         let availableImages = {};
         let isLoading = false;
         let typingTimer;
+        let cachedVisionAnalysis = null; // Store preloaded analysis
         const doneTypingInterval = 30000;
 
         // API endpoint
@@ -457,7 +487,7 @@
           }
 
           const image = availableImages[currentCategory][imageIndex];
-          loadImage(image.download_url, image.name); // ← UPDATED: Pass filename
+          loadImage(image.download_url, image.name);
         });
 
         // Load random image
@@ -477,17 +507,90 @@
           const randomIndex = Math.floor(Math.random() * images.length);
           const image = images[randomIndex];
           imageSelect.value = randomIndex;
-          loadImage(image.download_url, image.name); // ← UPDATED: Pass filename
+          loadImage(image.download_url, image.name);
         });
 
-        // ← UPDATED: Accept fileName parameter
-        function loadImage(url, fileName) {
+        // Load image and trigger Vision preload
+        async function loadImage(url, fileName) {
           currentImageUrl = url;
-          currentImageName = fileName; // ← ADDED: Track filename for caching
+          currentImageName = fileName;
+          cachedVisionAnalysis = null; // Reset
+          
           taskImageContainer.innerHTML = `<img src="${url}" alt="Task 1 visual">`;
           imageInstructions.style.display = 'block';
           comparisonContainer.style.display = 'none';
           comparisonContainer.innerHTML = '';
+
+          // Only preload Vision for maps and flowcharts
+          if (currentCategory === 'maps' || currentCategory === 'flowchart') {
+            await preloadVisionAnalysis();
+          }
+        }
+
+        // Preload Vision analysis
+        async function preloadVisionAnalysis() {
+          visionStatusContainer.innerHTML = '<span class="vision-status vision-loading">👁️ Loading Vision analysis...</span>';
+
+          try {
+            const response = await fetch(`${API_BASE}/openai-proxy-task1`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                requestType: 'preload-vision',
+                taskType: currentCategory,
+                imageUrl: currentImageUrl,
+                imageName: currentImageName
+              })
+            });
+
+            const data = await response.json();
+
+            if (data.error) {
+              visionStatusContainer.innerHTML = '<span class="vision-status error-message">⚠️ Vision analysis failed</span>';
+              return;
+            }
+
+            cachedVisionAnalysis = data.visionAnalysis;
+
+            if (data.cached) {
+              visionStatusContainer.innerHTML = '<span class="vision-status vision-cached">✅ Vision analysis loaded from cache</span>';
+            } else {
+              // NEW: Auto-download the Vision analysis
+              if (data.shouldDownload && data.downloadFilename) {
+                downloadVisionAnalysis(data.visionAnalysis, data.downloadFilename);
+                visionStatusContainer.innerHTML = `<span class="vision-status vision-downloaded">✅ Vision analysis downloaded: ${data.downloadFilename}</span>`;
+                
+                // Show GitHub path if available
+                if (data.githubPath) {
+                  const pathNote = document.createElement('div');
+                  pathNote.style.cssText = 'margin-top: 5px; font-size: 12px; color: #666;';
+                  pathNote.textContent = `📂 Upload to: ${data.githubPath}`;
+                  visionStatusContainer.appendChild(pathNote);
+                }
+              } else {
+                visionStatusContainer.innerHTML = '<span class="vision-status vision-cached">✅ Vision analysis loaded (new)</span>';
+              }
+            }
+
+          } catch (error) {
+            console.error('Vision preload error:', error);
+            visionStatusContainer.innerHTML = '<span class="vision-status error-message">⚠️ Vision preload failed</span>';
+          }
+        }
+
+        // NEW: Auto-download function
+        function downloadVisionAnalysis(content, filename) {
+          const blob = new Blob([content], { type: 'text/plain' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          
+          console.log('📥 Vision analysis downloaded:', filename);
         }
 
         function showError(message) {
@@ -546,7 +649,6 @@
           }
         });
 
-        // ← UPDATED: Send imageName to backend for caching
         async function requestFeedback(type) {
           if (isLoading) return;
           
@@ -575,7 +677,8 @@
               requestType: type,
               taskType: currentCategory,
               imageUrl: currentImageUrl,
-              imageName: currentImageName // ← ADDED: Send filename for caching
+              imageName: currentImageName,
+              cachedVisionAnalysis: cachedVisionAnalysis // Send preloaded analysis
             };
 
             const response = await fetch(`${API_BASE}/openai-proxy-task1`, {
@@ -587,16 +690,8 @@
             const data = await response.json();
 
             if (data.error) {
-              feedbackContainer.innerHTML = `<h4>${titles[type]}</h4><p class="error-message">${data.feedback || 'Error generating feedback'}</p>`;
+              feedbackContainer.innerHTML = `<h4>${titles[type]}</h4><p class="error-message">${data.message || data.feedback || 'Error generating feedback'}</p>`;
               return;
-            }
-
-            // ← ADDED: Log Vision analysis for manual caching
-            if (data.visionAnalysisForCaching && currentImageName) {
-              console.log("=== VISION ANALYSIS FOR CACHING ===");
-              console.log(`Save this to: visuals/${currentCategory}/${currentImageName.replace(/\.(png|jpg|jpeg|webp)$/i, '.txt')}`);
-              console.log(data.visionAnalysisForCaching);
-              console.log("=== END VISION ANALYSIS ===");
             }
 
             if (type === 'full-feedback') {
