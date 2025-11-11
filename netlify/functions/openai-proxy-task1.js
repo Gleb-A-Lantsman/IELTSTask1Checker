@@ -82,20 +82,14 @@ exports.handler = async (event) => {
         console.log(`🎨 DALL-E generation for ${taskType}`);
         
         try {
-          // Create DALL-E prompt from student description
-          const dallePrompt = `Create a clean, simple IELTS-style diagram based on this description:
+          // Create DALL-E prompt from student description (must be under 1000 chars)
+          // Extract key information from student description
+          const descriptionWords = content.split(' ');
+          const shortDesc = descriptionWords.slice(0, 80).join(' '); // Limit to ~80 words
+          
+          const dallePrompt = `IELTS diagram: ${shortDesc}. Clean infographic style, simple shapes, clear labels, before/after side-by-side if applicable.`;
 
-${content}
-
-Style requirements:
-- Clean, flat infographic style
-- Simple shapes and icons
-- Clear labels
-- Easy to read
-- Educational diagram aesthetic
-- If "before and after", show side-by-side comparison with clear labels`;
-
-          console.log("🎨 Calling DALL-E API...");
+          console.log("🎨 Calling DALL-E API...", dallePrompt.length, "chars");
 
           const dalleRes = await fetch("https://api.openai.com/v1/images/generations", {
             method: "POST",
