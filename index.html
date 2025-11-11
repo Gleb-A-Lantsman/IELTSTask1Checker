@@ -543,10 +543,29 @@
               })
             });
 
-            const data = await response.json();
+            // Check if response is OK before parsing
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            // Get text first to avoid JSON parse errors
+            const responseText = await response.text();
+            if (!responseText || responseText.trim().length === 0) {
+              throw new Error('Empty response from server');
+            }
+
+            let data;
+            try {
+              data = JSON.parse(responseText);
+            } catch (parseError) {
+              console.error('JSON parse error. Response:', responseText.substring(0, 500));
+              throw new Error(`Failed to parse response: ${parseError.message}`);
+            }
 
             if (data.error) {
-              visionStatusContainer.innerHTML = '<span class="vision-status error-message">⚠️ Vision analysis failed</span>';
+              const errorMsg = data.message || 'Vision analysis failed';
+              visionStatusContainer.innerHTML = `<span class="vision-status error-message">⚠️ ${errorMsg}</span>`;
+              console.error('Vision error details:', data.details);
               return;
             }
 
@@ -574,7 +593,7 @@
 
           } catch (error) {
             console.error('Vision preload error:', error);
-            visionStatusContainer.innerHTML = '<span class="vision-status error-message">⚠️ Vision preload failed</span>';
+            visionStatusContainer.innerHTML = `<span class="vision-status error-message">⚠️ Vision failed: ${error.message}</span>`;
           }
         }
 
