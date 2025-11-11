@@ -58,6 +58,8 @@ exports.handler = async (event) => {
 
         // No cache - run Vision API
         console.log("👁️ Running Vision API...");
+        console.log("Image URL:", imageUrl?.substring(0, 100));
+        console.log("Task type:", taskType);
         
         const visionPrompt = `Analyze this IELTS map in DETAIL for accurate SVG recreation:
 
@@ -115,7 +117,7 @@ Be specific about POSITIONS - use compass directions, relative distances, groupi
                     type: "image_url", 
                     image_url: { 
                       url: imageUrl,
-                      detail: "low"
+                      detail: "high"  // Changed to high for better analysis
                     }
                   }
                 ]
@@ -127,13 +129,33 @@ Be specific about POSITIONS - use compass directions, relative distances, groupi
         });
 
         if (!visionRes.ok) {
-          throw new Error(`Vision API error: ${visionRes.status}`);
+          const errorText = await visionRes.text();
+          console.error(`❌ Vision API error: ${visionRes.status}`, errorText);
+          throw new Error(`Vision API error: ${visionRes.status} - ${errorText.substring(0, 200)}`);
         }
 
-        const visionData = await visionRes.json();
+        // Check if response has content before parsing
+        const responseText = await visionRes.text();
+        if (!responseText || responseText.trim().length === 0) {
+          throw new Error('Vision API returned empty response');
+        }
+
+        let visionData;
+        try {
+          visionData = JSON.parse(responseText);
+        } catch (parseError) {
+          console.error('❌ JSON parse error:', responseText.substring(0, 500));
+          throw new Error(`Failed to parse Vision API response: ${parseError.message}`);
+        }
+
         const visionAnalysis = visionData.choices?.[0]?.message?.content?.trim() || "";
         
-        console.log("✅ Vision complete");
+        if (!visionAnalysis) {
+          console.error('❌ No vision analysis in response:', JSON.stringify(visionData));
+          throw new Error('Vision API returned no analysis content');
+        }
+        
+        console.log("✅ Vision complete:", visionAnalysis.length, "chars");
         
         // Generate proper filename for GitHub structure
         const txtFilename = imageName ? imageName.replace(/\.(png|jpg|jpeg|webp)$/i, '.txt') : 'vision-analysis.txt';
@@ -155,12 +177,17 @@ Be specific about POSITIONS - use compass directions, relative distances, groupi
 
       } catch (error) {
         console.error("❌ Vision preload error:", error.message);
+        console.error("Error stack:", error.stack);
         return {
           statusCode: 200,
-          headers: { "Content-Type": "application/json" },
+          headers: { 
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*"
+          },
           body: JSON.stringify({
             error: true,
-            message: "Vision analysis failed",
+            message: `Vision analysis failed: ${error.message}`,
+            details: error.stack ? error.stack.substring(0, 500) : 'No stack trace'
           }),
         };
       }
