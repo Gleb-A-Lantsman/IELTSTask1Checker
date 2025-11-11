@@ -280,43 +280,67 @@ Be specific about POSITIONS - use compass directions, relative distances, groupi
           // Generate SVG using preloaded analysis
           console.log("🎨 Generating SVG...");
 
-          const svgPrompt = `Create an ACCURATE SVG recreation using this detailed analysis:
+          const svgPrompt = `Create an ACCURATE SVG that matches BOTH the Vision analysis AND the student's description:
 
-IMAGE ANALYSIS:
+IMAGE ANALYSIS (Technical details):
 ${cachedVisionAnalysis}
 
-STUDENT DESCRIPTION:
+STUDENT DESCRIPTION (Spatial structure - FOLLOW THIS):
 ${content}
 
+CRITICAL: Extract spatial information from STUDENT DESCRIPTION first:
+1. Parse phrases like "two main areas", "near the beach", "eastern part", "central area", "southern tip"
+2. Count features mentioned (e.g., "several huts" might mean 6-12)
+3. Identify spatial relationships (e.g., "one near X and another near Y" = TWO clusters)
+4. Use student's structure as PRIMARY guide for positioning
+
 REQUIREMENTS:
-1. **Use emoji/Unicode symbols** for visual elements:
-   - Trees: 🌴 or 🌳 (use <text> with emoji)
-   - Huts/small buildings: 🏠 or 🛖
-   - Large buildings: 🏢 or 🏨
-   - Pier: Use rectangles
-   - Boats: ⛵ or 🚤
+1. **Spatial positioning from student description:**
+   - "two main areas" = Create TWO distinct separated clusters, NOT one continuous line
+   - "near the beach" / "western" = Position on LEFT side near beach edge
+   - "eastern part" = Position on RIGHT side of island
+   - "central area" = Position in CENTER of island
+   - "southern" / "south" = Position at BOTTOM edge
    
-2. **Accurate spatial positioning:**
-   - Follow the analysis EXACTLY for placement
-   - Use the described island outline shape
-   - Position water, beach, and land correctly
-   - Place features in their specific locations (NW, SE, etc.)
-
+2. **Use emoji/Unicode symbols** for visual elements:
+   - Trees: 🌴
+   - Huts/accommodation: 🏠 
+   - Reception: 🏢
+   - Restaurant: 🍽️
+   - Pier: Brown rectangle (#8B4513)
+   - Paths: Dashed lines (stroke-dasharray)
+   - Boats: ⛵ (if mentioned)
+   
 3. **Layout structure:**
-   - Before map: viewBox top half (0-350 y-range)
-   - After map: viewBox bottom half (350-700 y-range)
-   - Or side-by-side if that's the layout
+   - Before map: viewBox top half (y: 0-340)
+   - After map: viewBox bottom half (y: 360-700)
+   - Island: Elongated oval shape
+   - Water: #4A90E2 (surrounds island)
+   - Beach: #F5DEB3 (where student describes it)
+   - Land: #90EE90
 
-4. **Visual styling:**
-   - Water: #4A90E2 or #87CEEB
-   - Beach/sand: #F5DEB3 or #D2B48C
-   - Land: #90EE90 or light green
-   - Use <path> for island outline
-   - Labels: "Before" and "After" in bold
+4. **Match student's descriptions:**
+   - If student says "several", show 6-8 items
+   - If student says "many", show 12+ items
+   - If student describes arrangement (e.g., "in a row", "in a circle"), follow that pattern
+   - If student says "connected by", draw paths/tracks between those features
 
-EXAMPLE EMOJI USAGE:
-<text x="100" y="150" font-size="24">🌴</text>
-<text x="200" y="250" font-size="20">🏠</text>
+5. **Visual hierarchy:**
+   - Make features mentioned multiple times slightly larger
+   - Central/important features (reception, restaurant) should be prominent
+   - Use size to show importance: 🏢 (bigger) vs 🏠 (smaller)
+
+EXAMPLE SPATIAL PARSING:
+"Several huts in two main areas — one near the beach and another in the eastern part"
+→ Create TWO separate hut clusters:
+   Cluster 1: 5-6 huts at x:200-350, y:600-650 (western/beach side)
+   Cluster 2: 5-6 huts at x:650-750, y:600-650 (eastern side)
+
+"Reception and restaurant in the central area"
+→ Position both in center: x:450-500, y:580-620
+
+"Pier in the south"  
+→ Position at bottom: x:400-450, y:720-770
 
 Output ONLY the complete SVG code with NO markdown formatting.`;
 
