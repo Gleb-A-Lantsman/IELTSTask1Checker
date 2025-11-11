@@ -424,7 +424,6 @@
         let availableImages = {};
         let isLoading = false;
         let typingTimer;
-        let cachedVisionAnalysis = null; // Store preloaded analysis
         const doneTypingInterval = 30000;
 
         // API endpoint
@@ -510,21 +509,18 @@
           loadImage(image.download_url, image.name);
         });
 
-        // Load image and trigger Vision preload
+        // Load image and display
         async function loadImage(url, fileName) {
           currentImageUrl = url;
           currentImageName = fileName;
-          cachedVisionAnalysis = null; // Reset
           
           taskImageContainer.innerHTML = `<img src="${url}" alt="Task 1 visual">`;
           imageInstructions.style.display = 'block';
           comparisonContainer.style.display = 'none';
           comparisonContainer.innerHTML = '';
-
-          // Only preload Vision for maps and flowcharts
-          if (currentCategory === 'maps' || currentCategory === 'flowchart') {
-            await preloadVisionAnalysis();
-          }
+          
+          // Note: No Vision preload needed - SVG generated directly from student description
+          visionStatusContainer.innerHTML = '<span class="vision-status vision-cached">✅ Image loaded - SVG will be generated from your description</span>';
         }
 
         // Preload Vision analysis
@@ -696,8 +692,7 @@
               requestType: type,
               taskType: currentCategory,
               imageUrl: currentImageUrl,
-              imageName: currentImageName,
-              cachedVisionAnalysis: cachedVisionAnalysis // Send preloaded analysis
+              imageName: currentImageName
             };
 
             const response = await fetch(`${API_BASE}/openai-proxy-task1`, {
