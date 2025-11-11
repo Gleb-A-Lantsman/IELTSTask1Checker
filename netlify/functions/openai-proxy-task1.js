@@ -105,6 +105,9 @@ Be concise - just facts for visualization.`;
         
         console.log("✅ Vision complete");
         
+        // Generate proper filename for GitHub structure
+        const txtFilename = imageName ? imageName.replace(/\.(png|jpg|jpeg|webp)$/i, '.txt') : 'vision-analysis.txt';
+        
         return {
           statusCode: 200,
           headers: { 
@@ -114,8 +117,9 @@ Be concise - just facts for visualization.`;
           body: JSON.stringify({
             visionAnalysis,
             cached: false,
-            shouldDownload: true, // Signal frontend to download
-            downloadFilename: imageName ? imageName.replace(/\.(png|jpg|jpeg|webp)$/i, '.txt') : 'vision-analysis.txt',
+            shouldDownload: true,
+            downloadFilename: txtFilename,
+            githubPath: `visuals/${taskType}/${txtFilename}`, // Include full path for reference
           }),
         };
 
