@@ -59,14 +59,44 @@ exports.handler = async (event) => {
         // No cache - run Vision API
         console.log("👁️ Running Vision API...");
         
-        const visionPrompt = `Analyze this IELTS map briefly:
+        const visionPrompt = `Analyze this IELTS map in DETAIL for accurate SVG recreation:
 
-1. Structure: before/after or single view?
-2. Count each feature type (trees, huts, buildings)
-3. Main areas: water, beach, land positions
-4. Key colors used
+**STRUCTURE:**
+- Before/after comparison or single view?
+- Layout orientation (horizontal/vertical split?)
 
-Be concise - just facts for visualization.`;
+**SPATIAL LAYOUT (be very specific):**
+- Island shape and outline
+- Water body positions (which edges: north/south/east/west?)
+- Beach/shore locations and extent
+- Pier/jetty locations and orientations
+- Road/path layouts (describe curves, intersections)
+
+**FEATURES - BEFORE MAP:**
+For each feature type, describe:
+- Exact count
+- Spatial distribution (clustered? scattered? in a line?)
+- Specific locations (e.g., "3 trees in NW corner", "palm trees along eastern shore")
+- Relative positions to each other
+
+**FEATURES - AFTER MAP:**
+Same detail as above, plus:
+- NEW buildings: locations, sizes, arrangements (grid? scattered?)
+- NEW infrastructure: describe layout precisely
+- REMOVED features: what disappeared?
+- UNCHANGED features: what stayed?
+
+**VISUAL DETAILS:**
+- Colors used for each element type
+- Icon styles (simple shapes? detailed drawings?)
+- Size relationships between elements
+- Any labels or legends
+
+**KEY LANDMARKS:**
+- Any distinctive features that anchor the layout
+- Reference points for positioning other elements
+
+Be specific about POSITIONS - use compass directions, relative distances, groupings. This will be used to recreate the map accurately.`;
 
         const visionRes = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
@@ -91,7 +121,7 @@ Be concise - just facts for visualization.`;
                 ]
               }
             ],
-            max_tokens: 600,
+            max_tokens: 1500,
             temperature: 0.1,
           }),
         });
@@ -223,7 +253,7 @@ Be concise - just facts for visualization.`;
           // Generate SVG using preloaded analysis
           console.log("🎨 Generating SVG...");
 
-          const svgPrompt = `Create accurate SVG from this analysis:
+          const svgPrompt = `Create an ACCURATE SVG recreation using this detailed analysis:
 
 IMAGE ANALYSIS:
 ${cachedVisionAnalysis}
@@ -231,23 +261,37 @@ ${cachedVisionAnalysis}
 STUDENT DESCRIPTION:
 ${content}
 
-SVG STRUCTURE:
-<svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
-  <g id="before">
-    <text x="500" y="30" font-size="20" font-weight="bold" text-anchor="middle">Before</text>
-  </g>
-  <g id="after" transform="translate(0,350)">
-    <text x="500" y="30" font-size="20" font-weight="bold" text-anchor="middle">After</text>
-  </g>
-</svg>
+REQUIREMENTS:
+1. **Use emoji/Unicode symbols** for visual elements:
+   - Trees: 🌴 or 🌳 (use <text> with emoji)
+   - Huts/small buildings: 🏠 or 🛖
+   - Large buildings: 🏢 or 🏨
+   - Pier: Use rectangles
+   - Boats: ⛵ or 🚤
+   
+2. **Accurate spatial positioning:**
+   - Follow the analysis EXACTLY for placement
+   - Use the described island outline shape
+   - Position water, beach, and land correctly
+   - Place features in their specific locations (NW, SE, etc.)
 
-ELEMENTS:
-- Trees: <circle cx="X" cy="Y" r="15" fill="#228B22"/>
-- Huts: <rect x="X" y="Y" width="50" height="40" fill="#8B4513"/>
-- Water: bottom, fill="#87CEEB"
-- Beach: above water, fill="#F5DEB3"
+3. **Layout structure:**
+   - Before map: viewBox top half (0-350 y-range)
+   - After map: viewBox bottom half (350-700 y-range)
+   - Or side-by-side if that's the layout
 
-Match analysis counts. Output ONLY SVG code.`;
+4. **Visual styling:**
+   - Water: #4A90E2 or #87CEEB
+   - Beach/sand: #F5DEB3 or #D2B48C
+   - Land: #90EE90 or light green
+   - Use <path> for island outline
+   - Labels: "Before" and "After" in bold
+
+EXAMPLE EMOJI USAGE:
+<text x="100" y="150" font-size="24">🌴</text>
+<text x="200" y="250" font-size="20">🏠</text>
+
+Output ONLY the complete SVG code with NO markdown formatting.`;
 
           const svgRes = await fetch("https://api.openai.com/v1/chat/completions", {
             method: "POST",
@@ -265,7 +309,7 @@ Match analysis counts. Output ONLY SVG code.`;
                 { role: "user", content: svgPrompt },
               ],
               temperature: 0.2,
-              max_tokens: 2500,
+              max_tokens: 3500,
             }),
           });
 
