@@ -2,6 +2,7 @@
 // Fixed version with proper Batch API implementation
 
 const { Sandbox } = require('@e2b/code-interpreter');
+const { FormData, Blob } = require('undici');  
 
 exports.handler = async (event) => {
   try {
@@ -208,52 +209,48 @@ ${content}`
       const jsonlContent = JSON.stringify(batchRequest);
       console.log("📝 JSONL created");
 
-      // Step 2: Upload JSONL file using multipart/form-data
-      const boundary = `----WebKitFormBoundary${Date.now()}`;
-      const fileBuffer = Buffer.from(jsonlContent, 'utf-8');
-      
-      // Build multipart form data manually
-      const parts = [];
-      
-      // Add purpose field
-      parts.push(
-        `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="purpose"\r\n\r\n` +
-        `batch\r\n`
-      );
-      
-      // Add file field
-      parts.push(
-        `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="file"; filename="batch_input.jsonl"\r\n` +
-        `Content-Type: application/jsonl\r\n\r\n`
-      );
-      
-      const formBody = Buffer.concat([
-        Buffer.from(parts.join(''), 'utf-8'),
-        fileBuffer,
-        Buffer.from(`\r\n--${boundary}--\r\n`, 'utf-8')
-      ]);
+// --- Step 2: Upload JSONL file, safely (no manual boundary) ---
+const jsonlLine = JSON.stringify(batchRequest) + "\n";  // newline is important
+const form = new FormData();
+form.append("purpose", "batch");
+form.append(
+  "file",
+  new Blob([jsonlLine], { type: "application/jsonl" }),
+  "batch_input.jsonl"
+);
 
-      const uploadRes = await fetch(`${OPENAI_API}/files`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-          'Content-Length': formBody.length.toString()
-        },
-        body: formBody
-      });
+const uploadRes = await fetch(`${OPENAI_API}/files`, {
+  method: "POST",
+  headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+  body: form,
+});
 
-      const uploadData = await uploadRes.json();
-      
-      if (uploadData.error) {
-        console.error("Upload error:", uploadData.error);
-        throw new Error(`File upload failed: ${uploadData.error.message}`);
-      }
+// Don’t assume JSON — check content-type first
+const ct = uploadRes.headers.get("content-type") || "";
+const bodyText = await uploadRes.text();
 
-      const fileId = uploadData.id;
-      console.log("📁 File uploaded:", fileId);
+if (!uploadRes.ok) {
+  console.error("File upload failed. Status:", uploadRes.status, uploadRes.statusText);
+  console.error("Response body:", bodyText.slice(0, 500));
+  throw new Error(`File upload failed: ${uploadRes.status}`);
+}
+
+let uploadData;
+try {
+  // OpenAI returns JSON here; guard just in case
+  uploadData = ct.includes("application/json") ? JSON.parse(bodyText) : JSON.parse("{}");
+} catch (e) {
+  console.error("Failed to parse upload JSON:", e, "Body:", bodyText.slice(0, 500));
+  throw new Error("File upload returned non-JSON payload");
+}
+
+const fileId = uploadData.id;
+if (!fileId) {
+  console.error("Upload response missing file id:", uploadData);
+  throw new Error("Upload response missing file id");
+}
+console.log("📁 File uploaded:", fileId);
+
 
       // Step 3: Create batch job
       const batchRes = await fetch(`${OPENAI_API}/batches`, {
