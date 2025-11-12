@@ -364,6 +364,16 @@
         margin-top: 5px;
         text-align: right;
       }
+
+      .poll-status {
+        margin-top: 10px;
+        padding: 8px 12px;
+        background-color: #fff3cd;
+        border-radius: 4px;
+        font-size: 13px;
+        color: #856404;
+        border: 1px solid #ffeaa7;
+      }
     </style>
   </head>
   <body>
@@ -376,7 +386,7 @@
         <li><strong>Write at least 150 words</strong> describing the visual information</li>
         <li>Click <strong>"Help me!"</strong> for quick tips while writing</li>
         <li>Click <strong>"Get Feedback"</strong> to see how well your description matches the image</li>
-        <li>The AI will generate a visual based on your description to compare with the original</li>
+        <li>For maps, the AI will generate an SVG based on your description (may take 1-2 minutes)</li>
       </ul>
     </div>
 
@@ -440,13 +450,14 @@
     </div>
 
     <div id="progress-container" class="progress-container">
-      <div class="progress-label" id="progress-label">Generating visualization...</div>
+      <div class="progress-label" id="progress-label">Processing...</div>
       <div class="progress-bar-bg">
         <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%">
           <span id="progress-percent">0%</span>
         </div>
       </div>
-      <div class="progress-time" id="progress-time">Estimated time: 0s</div>
+      <div class="progress-time" id="progress-time"></div>
+      <div id="poll-status" class="poll-status" style="display: none;"></div>
     </div>
 
     <div id="feedback-container" class="feedback-container">
@@ -483,6 +494,7 @@
         const progressPercent = document.getElementById('progress-percent');
         const progressLabel = document.getElementById('progress-label');
         const progressTime = document.getElementById('progress-time');
+        const pollStatus = document.getElementById('poll-status');
 
         let currentImageUrl = '';
         let currentImageName = '';
@@ -491,6 +503,9 @@
         let isLoading = false;
         let typingTimer;
         const doneTypingInterval = 30000;
+        let pollInterval = null;
+        let pollAttempts = 0;
+        const MAX_POLL_ATTEMPTS = 60; // 2 minutes max (60 * 2s = 120s)
 
         // API endpoint
         const API_BASE = 'https://ubiquitous-malasada.netlify.app/.netlify/functions';
@@ -499,50 +514,29 @@
         function showProgressBar(taskType) {
           progressContainer.classList.add('active');
           comparisonContainer.style.display = 'none';
+          pollStatus.style.display = 'none';
           
-          // Set expected time based on task type
-          let totalTime;
-          let label;
-          
-          if (taskType === 'maps' || taskType === 'flowchart') {
-            totalTime = 60; // 1 minute for maps
-            label = 'Generating map visualization...';
-          } else if (taskType === 'table') {
-            totalTime = 5; // 5 seconds for tables
-            label = 'Generating ASCII table...';
-          } else {
-            totalTime = 20; // 20 seconds for charts
-            label = 'Generating chart...';
-          }
+          let label = taskType === 'maps' 
+            ? 'Submitting map generation job...' 
+            : taskType === 'table'
+            ? 'Generating ASCII table...'
+            : 'Generating chart...';
           
           progressLabel.textContent = label;
-          progressTime.textContent = `Estimated time: ${totalTime}s`;
-          
-          // Animate progress bar
-          let elapsed = 0;
-          const interval = 100; // Update every 100ms
-          
-          const progressInterval = setInterval(() => {
-            elapsed += interval;
-            const percent = Math.min((elapsed / (totalTime * 1000)) * 100, 95);
-            progressBarFill.style.width = percent + '%';
-            progressPercent.textContent = Math.floor(percent) + '%';
-            
-            const remaining = Math.max(0, totalTime - Math.floor(elapsed / 1000));
-            progressTime.textContent = `Time remaining: ~${remaining}s`;
-            
-            if (elapsed >= totalTime * 1000) {
-              clearInterval(progressInterval);
-              progressLabel.textContent = 'Finishing up...';
-              progressBarFill.style.width = '95%';
-            }
-          }, interval);
-          
-          return progressInterval;
+          progressBarFill.style.width = '10%';
+          progressPercent.textContent = '10%';
+          progressTime.textContent = '';
         }
         
-        function hideProgressBar(progressInterval) {
-          if (progressInterval) clearInterval(progressInterval);
+        function updateProgress(percent, label) {
+          progressBarFill.style.width = percent + '%';
+          progressPercent.textContent = Math.floor(percent) + '%';
+          if (label) {
+            progressLabel.textContent = label;
+          }
+        }
+        
+        function hideProgressBar() {
           progressBarFill.style.width = '100%';
           progressPercent.textContent = '100%';
           progressLabel.textContent = 'Complete!';
@@ -551,7 +545,8 @@
             progressContainer.classList.remove('active');
             progressBarFill.style.width = '0%';
             progressPercent.textContent = '0%';
-          }, 500);
+            pollStatus.style.display = 'none';
+          }, 1000);
         }
 
         // Load available images when category changes
@@ -576,7 +571,6 @@
             if (!response.ok) throw new Error(`GitHub fetch failed: ${response.status}`);
             const files = await response.json();
 
-            // Filter only valid image files
             const imageFiles = files.filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f.name));
 
             if (imageFiles.length === 0) {
@@ -584,7 +578,6 @@
               return;
             }
 
-            // Store them locally and build dropdown
             availableImages[category] = imageFiles;
             imageSelect.innerHTML = '<option value="">-- Choose an image --</option>';
 
@@ -603,7 +596,6 @@
           }
         });
 
-        // Load selected image
         loadImageBtn.addEventListener('click', () => {
           const imageIndex = imageSelect.value;
           if (imageIndex === '' || !availableImages[currentCategory]) {
@@ -614,7 +606,6 @@
           loadImage(image.download_url, image.name);
         });
 
-        // Load random image
         randomImageBtn.addEventListener('click', () => {
           const category = categorySelect.value;
           if (!category) {
@@ -634,8 +625,7 @@
           loadImage(image.download_url, image.name);
         });
 
-        // Load image and display
-        async function loadImage(url, fileName) {
+        function loadImage(url, fileName) {
           currentImageUrl = url;
           currentImageName = fileName;
           
@@ -644,101 +634,15 @@
           comparisonContainer.style.display = 'none';
           comparisonContainer.innerHTML = '';
           
-          // Note: No Vision preload needed - SVG generated directly from student description
-          visionStatusContainer.innerHTML = '<span class="vision-status vision-cached">✅ Image loaded - SVG will be generated from your description</span>';
-        }
-
-        // Preload Vision analysis
-        async function preloadVisionAnalysis() {
-          visionStatusContainer.innerHTML = '<span class="vision-status vision-loading">👁️ Loading Vision analysis...</span>';
-
-          try {
-            const response = await fetch(`${API_BASE}/openai-proxy-task1`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                requestType: 'preload-vision',
-                taskType: currentCategory,
-                imageUrl: currentImageUrl,
-                imageName: currentImageName
-              })
-            });
-
-            // Check if response is OK before parsing
-            if (!response.ok) {
-              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            // Get text first to avoid JSON parse errors
-            const responseText = await response.text();
-            if (!responseText || responseText.trim().length === 0) {
-              throw new Error('Empty response from server');
-            }
-
-            let data;
-            try {
-              data = JSON.parse(responseText);
-            } catch (parseError) {
-              console.error('JSON parse error. Response:', responseText.substring(0, 500));
-              throw new Error(`Failed to parse response: ${parseError.message}`);
-            }
-
-            if (data.error) {
-              const errorMsg = data.message || 'Vision analysis failed';
-              visionStatusContainer.innerHTML = `<span class="vision-status error-message">⚠️ ${errorMsg}</span>`;
-              console.error('Vision error details:', data.details);
-              return;
-            }
-
-            cachedVisionAnalysis = data.visionAnalysis;
-
-            if (data.cached) {
-              visionStatusContainer.innerHTML = '<span class="vision-status vision-cached">✅ Vision analysis loaded from cache</span>';
-            } else {
-              // NEW: Auto-download the Vision analysis
-              if (data.shouldDownload && data.downloadFilename) {
-                downloadVisionAnalysis(data.visionAnalysis, data.downloadFilename);
-                visionStatusContainer.innerHTML = `<span class="vision-status vision-downloaded">✅ Vision analysis downloaded: ${data.downloadFilename}</span>`;
-                
-                // Show GitHub path if available
-                if (data.githubPath) {
-                  const pathNote = document.createElement('div');
-                  pathNote.style.cssText = 'margin-top: 5px; font-size: 12px; color: #666;';
-                  pathNote.textContent = `📂 Upload to: ${data.githubPath}`;
-                  visionStatusContainer.appendChild(pathNote);
-                }
-              } else {
-                visionStatusContainer.innerHTML = '<span class="vision-status vision-cached">✅ Vision analysis loaded (new)</span>';
-              }
-            }
-
-          } catch (error) {
-            console.error('Vision preload error:', error);
-            visionStatusContainer.innerHTML = `<span class="vision-status error-message">⚠️ Vision failed: ${error.message}</span>`;
-          }
-        }
-
-        // NEW: Auto-download function
-        function downloadVisionAnalysis(content, filename) {
-          const blob = new Blob([content], { type: 'text/plain' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-          
-          console.log('📥 Vision analysis downloaded:', filename);
+          visionStatusContainer.innerHTML = '<span class="vision-status vision-cached">✅ Image loaded - ready for feedback</span>';
         }
 
         function showError(message) {
           const errorDiv = document.createElement('div');
           errorDiv.className = 'error-message';
           errorDiv.textContent = message;
-          taskImageContainer.appendChild(errorDiv);
-          setTimeout(() => errorDiv.remove(), 5000);
+          feedbackContainer.appendChild(errorDiv);
+          setTimeout(() => errorDiv.remove(), 10000);
         }
 
         // Word count
@@ -756,15 +660,7 @@
           }
         }
 
-        essayTextarea.addEventListener('input', () => {
-          updateWordCount();
-          clearTimeout(typingTimer);
-          typingTimer = setTimeout(() => {
-            if (essayTextarea.value.length > 50) {
-              requestFeedback('help');
-            }
-          }, doneTypingInterval);
-        });
+        essayTextarea.addEventListener('input', updateWordCount);
 
         // Help button
         helpButton.addEventListener('click', () => {
@@ -789,185 +685,269 @@
           }
         });
 
-       async function requestFeedback(type) {
-  if (isLoading) return;
-  isLoading = true;
+        async function requestFeedback(type) {
+          if (isLoading) {
+            console.log('Already loading...');
+            return;
+          }
+          
+          isLoading = true;
+          feedbackButton.disabled = true;
+          helpButton.disabled = true;
 
-  const content = essayTextarea.value;
+          const content = essayTextarea.value;
 
-  if (currentCategory === "maps" && type === "full-feedback") {
-    console.log("🗺️ Using Batch Jobs for MAPS");
+          try {
+            // MAPS with batch jobs
+            if (currentCategory === "maps" && type === "full-feedback") {
+              console.log("🗺️ Using Batch Jobs for MAPS");
+              showProgressBar('maps');
 
-    // -----------------------------------------------------
-    // 1) Submit job
-    // -----------------------------------------------------
-    let submitRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        phase: "submit",
-        requestType: type,
-        taskType: currentCategory,
-        content
-      })
-    });
+              // 1) Submit job
+              updateProgress(20, 'Submitting map generation job...');
+              
+              const submitRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  phase: "submit",
+                  requestType: type,
+                  taskType: currentCategory,
+                  content
+                })
+              });
 
-    let submitData = await submitRes.json();
-    let job_id = submitData.job_id;
+              if (!submitRes.ok) {
+                throw new Error(`Submit failed: ${submitRes.status} ${submitRes.statusText}`);
+              }
 
-    console.log("✅ Job submitted:", job_id);
+              const submitData = await submitRes.json();
+              
+              if (submitData.error || !submitData.job_id) {
+                throw new Error(submitData.message || 'Failed to submit job');
+              }
 
-    // Show placeholder feedback immediately
-    feedbackContainer.innerHTML = `
-      <h4>Complete Feedback</h4>
-      <p>Generating map visualization…</p>
-    `;
+              const job_id = submitData.job_id;
+              console.log("✅ Job submitted:", job_id);
 
-    let svg = null;
+              feedbackContainer.innerHTML = `
+                <h4>Complete Feedback</h4>
+                <p>⏳ Generating map visualization... This may take 1-2 minutes.</p>
+                <p style="font-size: 13px; color: #666;">Job ID: ${job_id}</p>
+              `;
 
-    // -----------------------------------------------------
-    // 2) Poll every 2 seconds
-    // -----------------------------------------------------
-    while (!svg) {
-      await new Promise(r => setTimeout(r, 2000));
+              updateProgress(30, 'Map generation in progress...');
+              pollStatus.style.display = 'block';
+              pollStatus.textContent = 'Checking job status...';
 
-      let pollRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          phase: "poll",
-          requestType: type,
-          taskType: currentCategory,
-          job_id
-        })
-      });
+              // 2) Poll for results
+              pollAttempts = 0;
+              let svg = null;
 
-      let pollData = await pollRes.json();
+              const pollForResults = async () => {
+                pollAttempts++;
+                
+                if (pollAttempts > MAX_POLL_ATTEMPTS) {
+                  clearInterval(pollInterval);
+                  pollInterval = null;
+                  hideProgressBar();
+                  isLoading = false;
+                  feedbackButton.disabled = false;
+                  helpButton.disabled = false;
+                  
+                  feedbackContainer.innerHTML = `
+                    <h4>Complete Feedback</h4>
+                    <p class="error-message">⚠️ Timeout: Map generation took too long. Please try again.</p>
+                  `;
+                  return;
+                }
 
-      if (pollData.status === "completed") {
-        svg = pollData.generatedSvg;
-      } else {
-        console.log("⏳ Waiting…", pollData.status);
-      }
-    }
+                const progress = Math.min(30 + (pollAttempts / MAX_POLL_ATTEMPTS) * 60, 90);
+                updateProgress(progress, 'Generating map...');
+                pollStatus.textContent = `Attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS} - Checking status...`;
 
-    console.log("✅ SVG received");
+                try {
+                  const pollRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      phase: "poll",
+                      requestType: type,
+                      taskType: currentCategory,
+                      job_id
+                    })
+                  });
 
-    // Feedback
-    const fbRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        requestType: "help", // already computed earlier in pipeline
-        content
-      })
-    });
+                  if (!pollRes.ok) {
+                    throw new Error(`Poll failed: ${pollRes.status}`);
+                  }
 
-    const fbData = await fbRes.json();
-    feedbackContainer.innerHTML = formatFullFeedback(fbData.feedback);
+                  const pollData = await pollRes.json();
+                  console.log(`⏳ Poll ${pollAttempts}:`, pollData.status);
 
-    // -----------------------------------------------------
-    // Display comparison
-    // -----------------------------------------------------
-    comparisonContainer.style.display = "block";
-    comparisonContainer.innerHTML = `
-      <div class="comparison-container">
-        <div class="comparison-side">
-          <h5>Original Task Image</h5>
-          <img src="${currentImageUrl}">
-        </div>
+                  if (pollData.status === "error") {
+                    clearInterval(pollInterval);
+                    pollInterval = null;
+                    throw new Error(pollData.error || 'Job failed');
+                  }
 
-        <div class="comparison-side">
-          <h5>Your Description → SVG</h5>
-          <div style="
-              background:white;
-              padding: 10px;
-              border-radius: 8px;
-              border: 1px solid #ccc;
-              overflow:auto;
-            ">
-            ${svg}
-          </div>
-        </div>
-      </div>
-    `;
+                  if (pollData.status === "completed" && pollData.generatedSvg) {
+                    svg = pollData.generatedSvg;
+                    clearInterval(pollInterval);
+                    pollInterval = null;
+                    
+                    console.log("✅ SVG received");
+                    updateProgress(95, 'Finalizing feedback...');
+                    
+                    // Get feedback text
+                    const fbRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        requestType: "help",
+                        content,
+                        taskType: currentCategory
+                      })
+                    });
 
-    isLoading = false;
-    return;
-  }
+                    const fbData = await fbRes.json();
+                    feedbackContainer.innerHTML = formatFullFeedback(fbData.feedback);
 
-// -----------------------------------------------------
-  // ✅ NON-MAPS → fall back to original full-feedback logic
-  // -----------------------------------------------------
-  if (type === 'full-feedback') {
-    // Use progress bar for non-map types
-    let progressInterval = showProgressBar(currentCategory);
+                    // Display comparison
+                    comparisonContainer.style.display = "block";
+                    comparisonContainer.innerHTML = `
+                      <div class="comparison-container">
+                        <div class="comparison-side">
+                          <h5>🗺️ Original Task Image</h5>
+                          <img src="${currentImageUrl}" alt="Original map">
+                        </div>
+                        <div class="comparison-side">
+                          <h5>🎨 SVG Generated from Your Description</h5>
+                          <div style="
+                            background:white;
+                            padding: 15px;
+                            border-radius: 8px;
+                            border: 2px solid #ddd;
+                            overflow:auto;
+                            min-height: 400px;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                          ">
+                            ${svg}
+                          </div>
+                        </div>
+                      </div>
+                    `;
 
-    try {
-      const res = await fetch(`${API_BASE}/openai-proxy-task1`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content,
-          requestType: type,
-          taskType: currentCategory,
-          imageUrl: currentImageUrl,
-          imageName: currentImageName
-        })
-      });
+                    hideProgressBar();
+                    isLoading = false;
+                    feedbackButton.disabled = false;
+                    helpButton.disabled = false;
+                  }
+                } catch (pollError) {
+                  console.error('Poll error:', pollError);
+                  clearInterval(pollInterval);
+                  pollInterval = null;
+                  hideProgressBar();
+                  isLoading = false;
+                  feedbackButton.disabled = false;
+                  helpButton.disabled = false;
+                  
+                  feedbackContainer.innerHTML = `
+                    <h4>Complete Feedback</h4>
+                    <p class="error-message">⚠️ Error checking job status: ${pollError.message}</p>
+                  `;
+                }
+              };
 
-      const data = await res.json();
+              // Poll every 2 seconds
+              pollInterval = setInterval(pollForResults, 2000);
+              // Also run immediately
+              pollForResults();
+              
+              return; // Don't proceed to non-maps logic
+            }
 
-      hideProgressBar(progressInterval);
+            // NON-MAPS - regular feedback
+            if (type === 'help') {
+              showProgressBar('help');
+              updateProgress(50, 'Getting feedback...');
+              
+              const res = await fetch(`${API_BASE}/openai-proxy-task1`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  content,
+                  requestType: type,
+                  taskType: currentCategory
+                })
+              });
 
-      if (data.error) {
-        feedbackContainer.innerHTML = `<h4>Complete Feedback</h4><p class="error-message">${data.message || 'Error generating feedback'}</p>`;
-        return;
-      }
+              if (!res.ok) {
+                throw new Error(`Request failed: ${res.status}`);
+              }
 
-      displayFullFeedback(data);
-      isLoading = false;
-      return;
+              const data = await res.json();
+              
+              if (data.error) {
+                throw new Error(data.message || 'Feedback generation failed');
+              }
 
-    } catch (err) {
-      hideProgressBar(progressInterval);
-      feedbackContainer.innerHTML = `<h4>Complete Feedback</h4><p class="error-message">An error occurred. Please try again.</p>`;
-      isLoading = false;
-      return;
-    }
-  }
+              feedbackContainer.innerHTML = formatHelpFeedback(data.feedback);
+              hideProgressBar();
+              
+            } else if (type === 'full-feedback') {
+              showProgressBar(currentCategory);
+              updateProgress(30, 'Generating visualization...');
 
-  // -----------------------------------------------------
-  // ✅ HELP REQUEST stays the same
-  // -----------------------------------------------------
-  if (type === 'help') {
-    const res = await fetch(`${API_BASE}/openai-proxy-task1`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        content,
-        requestType: type,
-        taskType: currentCategory
-      })
-    });
+              const res = await fetch(`${API_BASE}/openai-proxy-task1`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  content,
+                  requestType: type,
+                  taskType: currentCategory,
+                  imageUrl: currentImageUrl,
+                  imageName: currentImageName
+                })
+              });
 
-    const data = await res.json();
-    feedbackContainer.innerHTML = formatHelpFeedback(data.feedback);
-    isLoading = false;
-    return;
-  }
-}
+              if (!res.ok) {
+                throw new Error(`Request failed: ${res.status}`);
+              }
 
+              const data = await res.json();
+
+              if (data.error) {
+                throw new Error(data.message || 'Feedback generation failed');
+              }
+
+              updateProgress(90, 'Finalizing...');
+              displayFullFeedback(data);
+              hideProgressBar();
+            }
+
+          } catch (err) {
+            console.error('Request error:', err);
+            hideProgressBar();
+            feedbackContainer.innerHTML = `
+              <h4>Complete Feedback</h4>
+              <p class="error-message">⚠️ ${err.message}</p>
+            `;
+          } finally {
+            isLoading = false;
+            feedbackButton.disabled = false;
+            helpButton.disabled = false;
+          }
+        }
 
         function displayFullFeedback(data) {
-          // Display text feedback
           feedbackContainer.innerHTML = formatFullFeedback(data.feedback);
 
-          // Reset comparison area
           comparisonContainer.innerHTML = "";
           comparisonContainer.style.display = "block";
 
-          // Case 1: ASCII table
           if (data.asciiTable) {
             comparisonContainer.innerHTML = `
               <div class="comparison-container">
@@ -976,66 +956,27 @@
                   <img src="${currentImageUrl}" alt="Original task image">
                 </div>
                 <div class="comparison-side">
-                  <h5>🧮 AI ASCII Table from Your Description</h5>
-                  <pre style="background:#fafafa; padding:15px; border-radius:4px; border:1px solid #ddd; font-family:monospace; overflow-x:auto;">
-${data.asciiTable}
-                  </pre>
+                  <h5>🧮 ASCII Table from Your Description</h5>
+                  <pre style="background:#fafafa; padding:15px; border-radius:4px; border:1px solid #ddd; font-family:monospace; overflow-x:auto;">${data.asciiTable}</pre>
                 </div>
               </div>
             `;
-            return;
-          }
-
-          // Case 2: SVG visualization
-          if (data.generatedSvg) {
-            comparisonContainer.innerHTML = `
-              <div class="comparison-container">
-                <div class="comparison-side">
-                  <h5>🗺️ Original Task Image</h5>
-                  <img src="${currentImageUrl}" alt="Original task image" style="max-width: 100%; height: auto; border-radius: 4px;">
-                </div>
-                <div class="comparison-side">
-                  <h5>🎨 SVG Visualization of Your Description</h5>
-                  <div style="
-                    background: white; 
-                    padding: 15px; 
-                    border-radius: 4px; 
-                    border: 2px solid #ddd; 
-                    overflow: auto;
-                    min-height: 400px;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                  ">
-                    ${data.generatedSvg}
-                  </div>
-                  <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
-                    Vector illustration generated from your description using SVG.
-                  </p>
-                </div>
-              </div>
-            `;
-            return;
-          }
-
-          // Case 3: Matplotlib chart
-          if (data.generatedImageBase64) {
+          } else if (data.generatedImageBase64) {
             comparisonContainer.innerHTML = `
               <div class="comparison-container">
                 <div class="comparison-side">
                   <h5>📊 Original Task Image</h5>
-                  <img src="${currentImageUrl}" alt="Original task image" style="max-width: 100%; height: auto;">
+                  <img src="${currentImageUrl}" alt="Original task image">
                 </div>
                 <div class="comparison-side">
-                  <h5>🐍 Python Visualization of Your Description</h5>
-                  <img src="${data.generatedImageBase64}" alt="Generated Python chart" style="max-width: 100%; height: auto; border-radius: 4px;">
+                  <h5>🐍 Python Chart from Your Description</h5>
+                  <img src="${data.generatedImageBase64}" alt="Generated chart" style="max-width: 100%; border-radius: 4px;">
                   <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
-                    Chart generated using Python (Matplotlib + Pandas) based on your description.
+                    Generated using Python (Matplotlib)
                   </p>
                 </div>
               </div>
             `;
-            return;
           }
         }
 
@@ -1043,7 +984,6 @@ ${data.asciiTable}
           const text = fb.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
           let html = '<h4>Complete Feedback</h4>';
 
-          // Parse sections for Task 1 criteria
           const sections = {
             'Task Achievement': 'task-achievement',
             'Coherence and Cohesion': 'coherence-cohesion',
@@ -1051,11 +991,13 @@ ${data.asciiTable}
             'Grammatical Range and Accuracy': 'grammatical-range'
           };
 
+          let foundSections = false;
           Object.keys(sections).forEach(sectionName => {
             const regex = new RegExp(`<strong>${sectionName}:?</strong>([\\s\\S]*?)(?=<strong>|$)`, 'i');
             const match = text.match(regex);
             
             if (match) {
+              foundSections = true;
               const content = match[1].trim();
               html += `
                 <div class="criteria-section ${sections[sectionName]}">
@@ -1066,8 +1008,7 @@ ${data.asciiTable}
             }
           });
 
-          // If no structured sections found, display as-is
-          if (!text.match(/Task Achievement|Coherence and Cohesion|Lexical Resource|Grammatical Range/i)) {
+          if (!foundSections) {
             html += `<p>${text}</p>`;
           }
 
