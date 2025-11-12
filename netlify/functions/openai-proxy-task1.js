@@ -2,7 +2,6 @@
 // Fixed version with proper Batch API implementation
 
 const { Sandbox } = require('@e2b/code-interpreter');
-const FormData = require('form-data');
 
 exports.handler = async (event) => {
   try {
@@ -209,26 +208,47 @@ ${content}`
       const jsonlContent = JSON.stringify(batchRequest);
       console.log("📝 JSONL created");
 
-      // Step 2: Upload JSONL file
-      const formData = new FormData();
-      formData.append('file', Buffer.from(jsonlContent), {
-        filename: 'batch_input.jsonl',
-        contentType: 'application/jsonl'
-      });
-      formData.append('purpose', 'batch');
+      // Step 2: Upload JSONL file using multipart/form-data
+      const boundary = `----WebKitFormBoundary${Date.now()}`;
+      const fileBuffer = Buffer.from(jsonlContent, 'utf-8');
+      
+      // Build multipart form data manually
+      const parts = [];
+      
+      // Add purpose field
+      parts.push(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="purpose"\r\n\r\n` +
+        `batch\r\n`
+      );
+      
+      // Add file field
+      parts.push(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="file"; filename="batch_input.jsonl"\r\n` +
+        `Content-Type: application/jsonl\r\n\r\n`
+      );
+      
+      const formBody = Buffer.concat([
+        Buffer.from(parts.join(''), 'utf-8'),
+        fileBuffer,
+        Buffer.from(`\r\n--${boundary}--\r\n`, 'utf-8')
+      ]);
 
       const uploadRes = await fetch(`${OPENAI_API}/files`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          ...formData.getHeaders()
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': formBody.length.toString()
         },
-        body: formData
+        body: formBody
       });
 
       const uploadData = await uploadRes.json();
       
       if (uploadData.error) {
+        console.error("Upload error:", uploadData.error);
         throw new Error(`File upload failed: ${uploadData.error.message}`);
       }
 
