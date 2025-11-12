@@ -1,7 +1,7 @@
-import json, re, os
+import json, os
 from openai import OpenAI
 from map_dictionary import MAP_OBJECTS
-from generate_svg_fallback import generate_svg  # your previous SVG function
+from generate_svg_fallback import generate_svg  # fallback
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
@@ -20,7 +20,7 @@ def handler(event, context):
         if not found_items:
             found_items.append("trees, buildings, paths, and sea")
 
-        # construct a precise, restrained prompt
+        # construct prompt
         prompt = f"""
 Create a clean, formal IELTS Writing Task 1 style educational diagram.
 Show two side-by-side maps labelled 'BEFORE' and 'AFTER'.
@@ -31,17 +31,13 @@ Keep the style simple, schematic, and non-creative — focus on clarity.
 """
 
         # try generating an image
-try:
-    img = client.images.generate(
-        model="gpt-image-1",
-        prompt=prompt.strip(),
-        size="1024x512",
-        response_format="b64_json"
-    )
-    base64_image = img.data[0].b64_json
-except Exception as e:
-    print("⚠️ OpenAI image generation error:", e)
-    raise
+        try:
+            img = client.images.generate(
+                model="gpt-image-1",
+                prompt=prompt.strip(),
+                size="1024x512",
+                response_format="b64_json"
+            )
             base64_image = img.data[0].b64_json
             return {
                 "statusCode": 200,
@@ -52,21 +48,23 @@ except Exception as e:
                     "prompt": prompt
                 })
             }
-except Exception as e:
-    print("⚠️ image.generate failed:", e)
-    fallback_reason = str(e)
-    svg = generate_svg(text)
-    return {
-        "statusCode": 200,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps({
-            "generatedSvg": svg,
-            "usedPipeline": "svg-fallback",
-            "error": fallback_reason
-        })
-    }
+
+        except Exception as e:
+            print("⚠️ OpenAI image generation error:", e)
+            fallback_reason = str(e)
+            svg = generate_svg(text)
+            return {
+                "statusCode": 200,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps({
+                    "generatedSvg": svg,
+                    "usedPipeline": "svg-fallback",
+                    "error": fallback_reason
+                })
+            }
 
     except Exception as e:
+        print("❌ Top-level error:", e)
         return {
             "statusCode": 500,
             "headers": {"Content-Type": "application/json"},
