@@ -1,9 +1,9 @@
 // openai-proxy-task1.js
-// Fixed version with proper Batch API implementation
+// ✅ Fixed and upgraded with PNG-first map generation + SVG fallback
 
 const { Sandbox } = require('@e2b/code-interpreter');
 
-// ✅ Patch global Blob & FormData correctly (Netlify safe)
+// ✅ Patch global Blob & FormData safely (Netlify compatible)
 let UndiciBlob, UndiciFormData;
 try {
   const undici = require('undici');
@@ -20,9 +20,7 @@ if (typeof globalThis.FormData === 'undefined' && UndiciFormData) {
   globalThis.FormData = UndiciFormData;
 }
 
-// Log check to verify
-console.log('✅ Blob/ FormData setup complete:', 
-  typeof globalThis.Blob, typeof globalThis.FormData);
+console.log('✅ Blob/FormData setup complete:', typeof globalThis.Blob, typeof globalThis.FormData);
 
 exports.handler = async (event) => {
   try {
@@ -40,6 +38,7 @@ exports.handler = async (event) => {
     console.log(`📩 Request: ${requestType} | ${taskType} | phase=${phase || 'none'}`);
 
     const OPENAI_API = "https://api.openai.com/v1";
+    const fetch = globalThis.fetch; // ensure native fetch, not undici polyfill
     let feedback = "";
     let asciiTable = null;
     let generatedImageBase64 = null;
@@ -58,10 +57,10 @@ exports.handler = async (event) => {
 
       console.log(`📊 Job status: ${jobData.status}`);
 
-      if (jobData.status === "failed" || jobData.status === "expired" || jobData.status === "cancelled") {
+      if (["failed", "expired", "cancelled"].includes(jobData.status)) {
         return {
           statusCode: 200,
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
           body: JSON.stringify({
             status: "error",
             error: `Batch job ${jobData.status}`,
@@ -73,7 +72,7 @@ exports.handler = async (event) => {
       if (jobData.status !== "completed") {
         return {
           statusCode: 200,
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
           body: JSON.stringify({
             status: jobData.status,
             generatedSvg: null
@@ -81,14 +80,13 @@ exports.handler = async (event) => {
         };
       }
 
-      // Job completed - fetch results
+      // Job completed — fetch results
       const fileId = jobData.output_file_id;
       console.log("📁 Fetching output file:", fileId);
 
       const fileRes = await fetch(`${OPENAI_API}/files/${fileId}/content`, {
         headers: { "Authorization": `Bearer ${process.env.OPENAI_API_KEY}` }
       });
-
       const fileContent = await fileRes.text();
       console.log("📄 File content received, length:", fileContent.length);
 
@@ -101,11 +99,7 @@ exports.handler = async (event) => {
           const result = JSON.parse(line);
           if (result.response?.body?.choices?.[0]?.message?.content) {
             let content = result.response.body.choices[0].message.content;
-            
-            // Clean up markdown if present
             content = content.replace(/```svg\n?/g, '').replace(/```\n?/g, '').trim();
-            
-            // Extract SVG
             const svgMatch = content.match(/<svg[\s\S]*?<\/svg>/i);
             if (svgMatch) {
               svg = svgMatch[0];
@@ -113,8 +107,8 @@ exports.handler = async (event) => {
               break;
             }
           }
-        } catch (parseError) {
-          console.error("Failed to parse line:", parseError);
+        } catch (err) {
+          console.error("Failed to parse line:", err);
         }
       }
 
@@ -122,7 +116,7 @@ exports.handler = async (event) => {
         console.error("❌ No SVG found in output");
         return {
           statusCode: 200,
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
           body: JSON.stringify({
             status: "error",
             error: "No SVG generated",
@@ -133,18 +127,18 @@ exports.handler = async (event) => {
 
       return {
         statusCode: 200,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          status: "completed",
-          generatedSvg: svg
-        })
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        body: JSON.stringify({ status: "completed", generatedSvg: svg })
       };
     }
 
     // ----------------------------------------------------------------------
-    // ✅ 1. FEEDBACK SECTION (for help and feedback)
+    // ✅ 1. FEEDBACK SECTION (Non-map tasks only)
     // ----------------------------------------------------------------------
-    if (requestType === "help" || (requestType === "full-feedback" && !phase)) {
+    if (
+      requestType === "help" ||
+      (requestType === "full-feedback" && !phase && taskType !== "maps")
+    ) {
       const feedbackPrompt =
         requestType === "help"
           ? `You are an IELTS examiner. Give SHORT helpful hints (under 150 words) for improving this IELTS Task 1 answer:\n\n${content}`
@@ -176,25 +170,23 @@ ${content}`;
 
       const feedbackData = await feedbackRes.json();
       feedback = feedbackData.choices?.[0]?.message?.content?.trim() || "";
-
       console.log("✅ Feedback generated");
 
       return {
         statusCode: 200,
-        headers: { 
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*"
-        },
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
         body: JSON.stringify({ feedback }),
       };
     }
 
-// ✅ 1.1 MAPS — Direct PNG generation (preferred)
-if (requestType === "full-feedback" && taskType === "maps" && !phase) {
-  console.log("🖼 Attempting direct image.generate for map...");
+    // ----------------------------------------------------------------------
+    // ✅ 1.1 MAPS — Direct PNG Generation (Primary)
+    // ----------------------------------------------------------------------
+    if (requestType === "full-feedback" && taskType === "maps" && !phase) {
+      console.log("🖼 Attempting direct image.generate for map...");
 
-  try {
-    const imgPrompt = `
+      try {
+        const imgPrompt = `
 Create a clean, formal IELTS Writing Task 1 style educational diagram.
 Show two side-by-side maps labelled 'BEFORE' and 'AFTER'.
 Include small icons for: trees, huts, reception, restaurant, footpath, pier, and beach.
@@ -202,54 +194,59 @@ Keep the layout schematic, readable, and non-creative — focus on clarity.
 Use colors like blue (sea), green (land), grey (paths), yellow (buildings).
 Text to visualize:
 ${content}
-    `.trim();
+`.trim();
 
-    const imgRes = await fetch(`${OPENAI_API}/images/generations`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "gpt-image-1",
-        prompt: imgPrompt,
-        size: "1024x512",
-        response_format: "b64_json"
-      })
-    });
+        const imgRes = await fetch(`${OPENAI_API}/images/generations`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "gpt-image-1",
+            prompt: imgPrompt,
+            size: "1024x512",
+            response_format: "b64_json"
+          })
+        });
 
-    const imgData = await imgRes.json();
-    if (imgData.error) throw new Error(imgData.error.message);
+        if (!imgRes.ok) {
+          const text = await imgRes.text();
+          console.error("❌ image.generate HTTP error:", imgRes.status, text);
+          throw new Error(`HTTP ${imgRes.status}`);
+        }
 
-    const b64 = imgData.data?.[0]?.b64_json;
-    if (b64) {
-      console.log("✅ PNG generated successfully");
-      return {
-        statusCode: 200,
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*"
-        },
-        body: JSON.stringify({
-          status: "completed",
-          usedPipeline: "image.generate",
-          generatedImageBase64: `data:image/png;base64,${b64}`
-        })
-      };
-    } else {
-      console.warn("⚠️ No image data found, switching to fallback");
+        const imgData = await imgRes.json();
+        console.log("🧾 image.generate response:", imgData);
+
+        const b64 = imgData.data?.[0]?.b64_json;
+        if (b64) {
+          console.log("✅ PNG generated successfully");
+          return {
+            statusCode: 200,
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+            body: JSON.stringify({
+              status: "completed",
+              usedPipeline: "image.generate",
+              generatedImageBase64: `data:image/png;base64,${b64}`
+            })
+          };
+        } else {
+          console.warn("⚠️ No image data found, switching to fallback");
+        }
+      } catch (err) {
+        console.error("⚠️ image.generate failed:", err.message);
+      }
+
+      console.log("↩️ Falling back to SVG batch generation...");
     }
-  } catch (err) {
-    console.error("⚠️ image.generate failed:", err.message);
-  }
 
-  // fallback to batch route
-  console.log("↩️ Falling back to SVG batch generation...");
-}
+    // ----------------------------------------------------------------------
+    // ✅ 2. MAPS — Fallback SVG Batch Job
+    // ----------------------------------------------------------------------
     if (requestType === "full-feedback" && taskType === "maps" && phase === "submit") {
       console.log("🚀 Fallback: Submitting Batch Job for MAP → SVG");
 
-      // Step 1: Create JSONL content
       const batchRequest = {
         custom_id: `map-${Date.now()}`,
         method: "POST",
@@ -259,7 +256,8 @@ ${content}
           messages: [
             {
               role: "system",
-              content: "You are an SVG diagram generator. Output ONLY valid SVG markup with no markdown, no backticks, no explanations. The SVG should be standalone and render correctly."
+              content:
+                "You are an SVG diagram generator. Output ONLY valid SVG markup with no markdown, no backticks, no explanations."
             },
             {
               role: "user",
@@ -280,53 +278,30 @@ ${content}`
         }
       };
 
-      const jsonlContent = JSON.stringify(batchRequest);
-      console.log("📝 JSONL created");
+      const jsonlLine = JSON.stringify(batchRequest) + "\n";
+      const form = new FormData();
+      form.append("purpose", "batch");
+      form.append("file", new Blob([jsonlLine], { type: "application/jsonl" }), "batch_input.jsonl");
 
-// --- Step 2: Upload JSONL file, safely (no manual boundary) ---
-const jsonlLine = JSON.stringify(batchRequest) + "\n";  // newline is important
-const form = new FormData();
-form.append("purpose", "batch");
-form.append(
-  "file",
-  new Blob([jsonlLine], { type: "application/jsonl" }),
-  "batch_input.jsonl"
-);
+      const uploadRes = await fetch(`${OPENAI_API}/files`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+        body: form,
+      });
 
-const uploadRes = await fetch(`${OPENAI_API}/files`, {
-  method: "POST",
-  headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-  body: form,
-});
+      const ct = uploadRes.headers.get("content-type") || "";
+      const bodyText = await uploadRes.text();
 
-// Don’t assume JSON — check content-type first
-const ct = uploadRes.headers.get("content-type") || "";
-const bodyText = await uploadRes.text();
+      if (!uploadRes.ok) {
+        console.error("File upload failed:", uploadRes.status, bodyText.slice(0, 500));
+        throw new Error(`File upload failed: ${uploadRes.status}`);
+      }
 
-if (!uploadRes.ok) {
-  console.error("File upload failed. Status:", uploadRes.status, uploadRes.statusText);
-  console.error("Response body:", bodyText.slice(0, 500));
-  throw new Error(`File upload failed: ${uploadRes.status}`);
-}
+      const uploadData = ct.includes("application/json") ? JSON.parse(bodyText) : {};
+      const fileId = uploadData.id;
+      if (!fileId) throw new Error("Upload response missing file id");
+      console.log("📁 File uploaded:", fileId);
 
-let uploadData;
-try {
-  // OpenAI returns JSON here; guard just in case
-  uploadData = ct.includes("application/json") ? JSON.parse(bodyText) : JSON.parse("{}");
-} catch (e) {
-  console.error("Failed to parse upload JSON:", e, "Body:", bodyText.slice(0, 500));
-  throw new Error("File upload returned non-JSON payload");
-}
-
-const fileId = uploadData.id;
-if (!fileId) {
-  console.error("Upload response missing file id:", uploadData);
-  throw new Error("Upload response missing file id");
-}
-console.log("📁 File uploaded:", fileId);
-
-
-      // Step 3: Create batch job
       const batchRes = await fetch(`${OPENAI_API}/batches`, {
         method: "POST",
         headers: {
@@ -336,30 +311,23 @@ console.log("📁 File uploaded:", fileId);
         body: JSON.stringify({
           input_file_id: fileId,
           endpoint: "/v1/chat/completions",
-          completion_window: "24h"
+          completion_window: "24h",
+          metadata: { source: "IELTS-map", type: "SVG-fallback" }
         })
       });
 
       const batchData = await batchRes.json();
-
-      if (batchData.error) {
-        throw new Error(`Batch creation failed: ${batchData.error.message}`);
-      }
+      if (batchData.error) throw new Error(`Batch creation failed: ${batchData.error.message}`);
 
       console.log("✅ Batch job created:", batchData.id);
 
       return {
         statusCode: 200,
-        headers: { 
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*"
-        },
-        body: JSON.stringify({
-          job_id: batchData.id,
-          status: "submitted"
-        })
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        body: JSON.stringify({ job_id: batchData.id, status: "submitted" })
       };
     }
+
 
     // ----------------------------------------------------------------------
     // ✅ 3. NON-MAPS — CHARTS AND TABLES
@@ -544,36 +512,25 @@ plt.close()
       }
     }
 
-    // ----------------------------------------------------------------------
+      // ----------------------------------------------------------------------
     // ✅ FINAL RESPONSE
     // ----------------------------------------------------------------------
     return {
       statusCode: 200,
-      headers: { 
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*"
-      },
-      body: JSON.stringify({
-        feedback,
-        asciiTable,
-        generatedImageBase64,
-        generatedSvg
-      }),
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      body: JSON.stringify({ feedback, asciiTable, generatedImageBase64, generatedSvg })
     };
 
   } catch (error) {
     console.error("❌ ERROR:", error);
     return {
       statusCode: 500,
-      headers: { 
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*"
-      },
+      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
       body: JSON.stringify({
         error: true,
         message: error.message,
-        feedback: `Server error: ${error.message}`,
-      }),
+        feedback: `Server error: ${error.message}`
+      })
     };
   }
 };
