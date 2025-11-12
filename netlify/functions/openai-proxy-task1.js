@@ -2,11 +2,27 @@
 // Fixed version with proper Batch API implementation
 
 const { Sandbox } = require('@e2b/code-interpreter');
-const { FormData, Blob } = require('undici');
 
-// ✅ Ensure Blob and FormData exist globally
-if (typeof globalThis.Blob === 'undefined') globalThis.Blob = Blob;
-if (typeof globalThis.FormData === 'undefined') globalThis.FormData = FormData; 
+// ✅ Patch global Blob & FormData correctly (Netlify safe)
+let UndiciBlob, UndiciFormData;
+try {
+  const undici = require('undici');
+  UndiciBlob = undici.Blob;
+  UndiciFormData = undici.FormData;
+} catch (err) {
+  console.warn('⚠️ undici not found, using global Blob/FormData if available');
+}
+
+if (typeof globalThis.Blob === 'undefined' && UndiciBlob) {
+  globalThis.Blob = UndiciBlob;
+}
+if (typeof globalThis.FormData === 'undefined' && UndiciFormData) {
+  globalThis.FormData = UndiciFormData;
+}
+
+// Log check to verify
+console.log('✅ Blob/ FormData setup complete:', 
+  typeof globalThis.Blob, typeof globalThis.FormData);
 
 exports.handler = async (event) => {
   try {
