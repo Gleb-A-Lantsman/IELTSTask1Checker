@@ -31,13 +31,17 @@ Keep the style simple, schematic, and non-creative — focus on clarity.
 """
 
         # try generating an image
-        try:
-            img = client.images.generate(
-                model="gpt-image-1",
-                prompt=prompt.strip(),
-                size="1024x512",
-                response_format="b64_json"
-            )
+try:
+    img = client.images.generate(
+        model="gpt-image-1",
+        prompt=prompt.strip(),
+        size="1024x512",
+        response_format="b64_json"
+    )
+    base64_image = img.data[0].b64_json
+except Exception as e:
+    print("⚠️ OpenAI image generation error:", e)
+    raise
             base64_image = img.data[0].b64_json
             return {
                 "statusCode": 200,
@@ -48,18 +52,19 @@ Keep the style simple, schematic, and non-creative — focus on clarity.
                     "prompt": prompt
                 })
             }
-        except Exception as e:
-            print("⚠️ image.generate failed:", e)
-            # fallback to SVG
-            svg = generate_svg(text)
-            return {
-                "statusCode": 200,
-                "headers": {"Content-Type": "application/json"},
-                "body": json.dumps({
-                    "generatedSvg": svg,
-                    "usedPipeline": "svg-fallback"
-                })
-            }
+except Exception as e:
+    print("⚠️ image.generate failed:", e)
+    fallback_reason = str(e)
+    svg = generate_svg(text)
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps({
+            "generatedSvg": svg,
+            "usedPipeline": "svg-fallback",
+            "error": fallback_reason
+        })
+    }
 
     except Exception as e:
         return {
