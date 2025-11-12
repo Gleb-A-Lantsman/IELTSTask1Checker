@@ -4,6 +4,13 @@
 const { Sandbox } = require('@e2b/code-interpreter');
 const { FormData, Blob } = require('undici');  
 
+// ✅ Ensure Blob and FormData are available
+import { Blob as UndiciBlob, FormData as UndiciFormData } from "undici";
+
+// Patch global if needed
+if (typeof globalThis.Blob === "undefined") globalThis.Blob = UndiciBlob;
+if (typeof globalThis.FormData === "undefined") globalThis.FormData = UndiciFormData;
+
 exports.handler = async (event) => {
   try {
     const body = JSON.parse(event.body || "{}");
