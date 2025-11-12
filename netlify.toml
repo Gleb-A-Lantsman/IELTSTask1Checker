@@ -3,7 +3,7 @@
 
 [build.environment]
   PYTHON_VERSION = "3.9"
-  NODE_VERSION = "20"
+  NODE_VERSION = "20.10.0"
 
 [functions]
   node_bundler = "esbuild"
