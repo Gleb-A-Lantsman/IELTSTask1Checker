@@ -2,14 +2,11 @@
 // Fixed version with proper Batch API implementation
 
 const { Sandbox } = require('@e2b/code-interpreter');
-const { FormData, Blob } = require('undici');  
+const { FormData, Blob } = require('undici');
 
-// ✅ Ensure Blob and FormData are available
-import { Blob as UndiciBlob, FormData as UndiciFormData } from "undici";
-
-// Patch global if needed
-if (typeof globalThis.Blob === "undefined") globalThis.Blob = UndiciBlob;
-if (typeof globalThis.FormData === "undefined") globalThis.FormData = UndiciFormData;
+// ✅ Ensure Blob and FormData exist globally
+if (typeof globalThis.Blob === 'undefined') globalThis.Blob = Blob;
+if (typeof globalThis.FormData === 'undefined') globalThis.FormData = FormData; 
 
 exports.handler = async (event) => {
   try {
