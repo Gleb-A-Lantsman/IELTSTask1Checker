@@ -189,11 +189,65 @@ ${content}`;
       };
     }
 
-    // ----------------------------------------------------------------------
-    // ✅ 2. MAPS — SUBMIT BATCH JOB
-    // ----------------------------------------------------------------------
+// ✅ 1.1 MAPS — Direct PNG generation (preferred)
+if (requestType === "full-feedback" && taskType === "maps" && !phase) {
+  console.log("🖼 Attempting direct image.generate for map...");
+
+  try {
+    const imgPrompt = `
+Create a clean, formal IELTS Writing Task 1 style educational diagram.
+Show two side-by-side maps labelled 'BEFORE' and 'AFTER'.
+Include small icons for: trees, huts, reception, restaurant, footpath, pier, and beach.
+Keep the layout schematic, readable, and non-creative — focus on clarity.
+Use colors like blue (sea), green (land), grey (paths), yellow (buildings).
+Text to visualize:
+${content}
+    `.trim();
+
+    const imgRes = await fetch(`${OPENAI_API}/images/generations`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "gpt-image-1",
+        prompt: imgPrompt,
+        size: "1024x512",
+        response_format: "b64_json"
+      })
+    });
+
+    const imgData = await imgRes.json();
+    if (imgData.error) throw new Error(imgData.error.message);
+
+    const b64 = imgData.data?.[0]?.b64_json;
+    if (b64) {
+      console.log("✅ PNG generated successfully");
+      return {
+        statusCode: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*"
+        },
+        body: JSON.stringify({
+          status: "completed",
+          usedPipeline: "image.generate",
+          generatedImageBase64: `data:image/png;base64,${b64}`
+        })
+      };
+    } else {
+      console.warn("⚠️ No image data found, switching to fallback");
+    }
+  } catch (err) {
+    console.error("⚠️ image.generate failed:", err.message);
+  }
+
+  // fallback to batch route
+  console.log("↩️ Falling back to SVG batch generation...");
+}
     if (requestType === "full-feedback" && taskType === "maps" && phase === "submit") {
-      console.log("🚀 Submitting Batch Job for MAP → SVG");
+      console.log("🚀 Fallback: Submitting Batch Job for MAP → SVG");
 
       // Step 1: Create JSONL content
       const batchRequest = {
