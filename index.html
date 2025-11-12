@@ -471,6 +471,8 @@
     <div id="comparison-container" style="display: none;"></div>
 
     <script>
+
+      
       document.addEventListener("DOMContentLoaded", () => {
         const categorySelect = document.getElementById('category-select');
         const imageSelect = document.getElementById('image-select');
@@ -509,6 +511,8 @@
 
         // API endpoint
         const API_BASE = 'https://ubiquitous-malasada.netlify.app/.netlify/functions';
+        // Local deterministic map generator endpoint (Python)
+        const LOCAL_MAP_API = '/.netlify/functions/generate_map';
 
         // Progress bar functions
         function showProgressBar(taskType) {
@@ -698,10 +702,65 @@
           const content = essayTextarea.value;
 
           try {
-            // MAPS with batch jobs
-            if (currentCategory === "maps" && type === "full-feedback") {
-              console.log("🗺️ Using Batch Jobs for MAPS");
-              showProgressBar('maps');
+            // MAPS category
+if (currentCategory === "maps" && type === "full-feedback") {
+  const content = essayTextarea.value.trim();
+
+  // ✅ Fast deterministic path (local SVG render)
+  if (!content.match(/north|south|east|west|road|street|housing|factory|school|airport|university|river|town|village|industrial/i)) {
+    console.log("⚡ Using local deterministic Python renderer");
+    showProgressBar('maps');
+    updateProgress(40, 'Generating local SVG map...');
+
+    try {
+      const res = await fetch(LOCAL_MAP_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content })
+      });
+
+      if (!res.ok) throw new Error(`Local map API failed (${res.status})`);
+      const svg = await res.text();
+
+      hideProgressBar();
+      feedbackContainer.innerHTML = `
+        <h4>Map Visualization</h4>
+        <p>✅ Generated instantly using the local Python SVG renderer.</p>
+      `;
+      comparisonContainer.style.display = "block";
+      comparisonContainer.innerHTML = `
+        <div class="comparison-container">
+          <div class="comparison-side">
+            <h5>🗺️ Original Task Image</h5>
+            <img src="${currentImageUrl}" alt="Original map">
+          </div>
+          <div class="comparison-side">
+            <h5>🎨 SVG Generated from Your Description</h5>
+            <div style="background:white;padding:15px;border-radius:8px;border:2px solid #ddd;overflow:auto;min-height:400px;display:flex;justify-content:center;align-items:center;">
+              ${svg}
+            </div>
+          </div>
+        </div>`;
+      isLoading = false;
+      feedbackButton.disabled = false;
+      helpButton.disabled = false;
+      return; // done
+    } catch (localErr) {
+      console.error("Local map render failed:", localErr);
+      feedbackContainer.innerHTML = `
+        <h4>Map Visualization</h4>
+        <p class="error-message">⚠️ Local SVG generation failed: ${localErr.message}</p>`;
+      hideProgressBar();
+      isLoading = false;
+      feedbackButton.disabled = false;
+      helpButton.disabled = false;
+      return;
+    }
+  }
+
+  // 🧠 Fallback path (OpenAI Batch job)
+  console.log("🧠 Using Batch Jobs for complex map");
+  showProgressBar('maps');
 
               // 1) Submit job
               updateProgress(20, 'Submitting map generation job...');
