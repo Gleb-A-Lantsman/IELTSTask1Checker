@@ -3,24 +3,22 @@
 
 const { Sandbox } = require('@e2b/code-interpreter');
 
-// ✅ Patch global Blob & FormData safely (Netlify compatible)
+// ✅ Patch Blob/FormData only for batch uploads, not for JSON calls
 let UndiciBlob, UndiciFormData;
 try {
   const undici = require('undici');
   UndiciBlob = undici.Blob;
   UndiciFormData = undici.FormData;
 } catch (err) {
-  console.warn('⚠️ undici not found, using global Blob/FormData if available');
+  console.warn('⚠️ undici not found');
 }
 
-if (typeof globalThis.Blob === 'undefined' && UndiciBlob) {
-  globalThis.Blob = UndiciBlob;
-}
-if (typeof globalThis.FormData === 'undefined' && UndiciFormData) {
-  globalThis.FormData = UndiciFormData;
-}
+// 👉 Don’t override global Blob/FormData for everything
+//    Just export local references we’ll use later.
+const useBlob = UndiciBlob || globalThis.Blob;
+const useFormData = UndiciFormData || globalThis.FormData;
 
-console.log('✅ Blob/FormData setup complete:', typeof globalThis.Blob, typeof globalThis.FormData);
+console.log('✅ Blob/FormData ready:', !!useBlob, !!useFormData);
 
 exports.handler = async (event) => {
   try {
@@ -279,9 +277,10 @@ ${content}`
       };
 
       const jsonlLine = JSON.stringify(batchRequest) + "\n";
-      const form = new FormData();
+      const form = new useFormData();
       form.append("purpose", "batch");
-      form.append("file", new Blob([jsonlLine], { type: "application/jsonl" }), "batch_input.jsonl");
+      form.append("file", new useBlob([jsonlLine], { type: "application/jsonl" }), "batch_input.jsonl");
+
 
       const uploadRes = await fetch(`${OPENAI_API}/files`, {
         method: "POST",
