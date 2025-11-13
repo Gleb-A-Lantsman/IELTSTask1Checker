@@ -1,9 +1,9 @@
 // openai-proxy-task1.js
-// PNG-first for maps via images.generate; SVG batch is fallback; tables/charts unchanged.
+// Async processing for both DALL-E PNG and SVG generation
 
 const { Sandbox } = require("@e2b/code-interpreter");
 
-// Use undici's Blob/FormData only when we need multipart for batch upload
+// Use undici's Blob/FormData for batch upload
 let UndiciBlob, UndiciFormData;
 try {
   const undici = require("undici");
@@ -15,6 +15,17 @@ try {
 const useBlob = UndiciBlob || globalThis.Blob;
 const useFormData = UndiciFormData || globalThis.FormData;
 
+// In-memory job storage (use Redis/DynamoDB in production)
+const jobStore = new Map();
+
+// Job status types
+const JobStatus = {
+  PENDING: 'pending',
+  PROCESSING: 'processing',
+  COMPLETED: 'completed',
+  FAILED: 'failed'
+};
+
 exports.handler = async (event) => {
   try {
     const body = JSON.parse(event.body || "{}");
@@ -22,98 +33,145 @@ exports.handler = async (event) => {
       content,
       requestType,
       taskType,
-      imageUrl,   // (unused right now, but kept for parity)
-      imageName,  // (unused)
-      phase,      // "submit" for SVG fallback submit; "poll" for polling
+      imageUrl,
+      imageName,
+      phase,      // "submit" | "poll"
       job_id
     } = body;
 
     const OPENAI_API = "https://api.openai.com/v1";
     const fetch = globalThis.fetch;
 
-    let feedback = "";
-    let asciiTable = null;
-    let generatedImageBase64 = null;
-    let generatedSvg = null;
-
     // ---------------------------
-    // 0) POLL SVG BATCH (fallback)
+    // 0) POLL ANY JOB (PNG or SVG)
     // ---------------------------
-    if (taskType === "maps" && phase === "poll" && job_id) {
-      const jobRes = await fetch(`${OPENAI_API}/batches/${job_id}`, {
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
-      });
+    if (phase === "poll" && job_id) {
+      const job = jobStore.get(job_id);
       
-      if (!jobRes.ok) {
-        return ok({ status: "error", error: `Failed to fetch batch status: ${jobRes.status}`, generatedSvg: null });
-      }
-      
-      const jobData = await jobRes.json();
-
-      if (["failed", "expired", "cancelled"].includes(jobData.status)) {
-        return ok({ status: "error", error: `Batch job ${jobData.status}`, generatedSvg: null });
-      }
-      if (jobData.status !== "completed") {
-        return ok({ status: jobData.status, generatedSvg: null });
+      if (!job) {
+        return ok({ 
+          status: "error", 
+          error: "Job not found",
+          message: "Job may have expired or invalid job_id"
+        });
       }
 
-      // Completed: read JSONL output and extract SVG
-      const fileId = jobData.output_file_id;
-      if (!fileId) {
-        return ok({ status: "error", error: "No output file ID from batch", generatedSvg: null });
-      }
-      
-      const fileRes = await fetch(`${OPENAI_API}/files/${fileId}/content`, {
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
-      });
-      
-      if (!fileRes.ok) {
-        return ok({ status: "error", error: "Failed to fetch output file", generatedSvg: null });
-      }
-      
-      const fileText = await fileRes.text();
-      let svg = null;
+      // If job is still processing, check its type
+      if (job.status === JobStatus.PROCESSING || job.status === JobStatus.PENDING) {
+        // For SVG batch jobs, check OpenAI batch status
+        if (job.type === 'svg_batch' && job.batchId) {
+          try {
+            const jobRes = await fetch(`${OPENAI_API}/batches/${job.batchId}`, {
+              headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+            });
+            
+            if (!jobRes.ok) {
+              job.status = JobStatus.FAILED;
+              job.error = `Failed to fetch batch status: ${jobRes.status}`;
+              return ok({ status: "error", error: job.error });
+            }
+            
+            const batchData = await jobRes.json();
 
-      for (const line of fileText.trim().split("\n")) {
-        if (!line.trim()) continue;
-        try {
-          const obj = JSON.parse(line);
-          const content = obj?.response?.body?.choices?.[0]?.message?.content || "";
-          const cleaned = content.replace(/```svg\n?/g, "").replace(/```\n?/g, "").trim();
-          const m = cleaned.match(/<svg[\s\S]*?<\/svg>/i);
-          if (m) { 
-            svg = m[0]; 
-            break; 
+            if (["failed", "expired", "cancelled"].includes(batchData.status)) {
+              job.status = JobStatus.FAILED;
+              job.error = `Batch job ${batchData.status}`;
+              return ok({ status: "error", error: job.error });
+            }
+            
+            if (batchData.status !== "completed") {
+              return ok({ status: batchData.status });
+            }
+
+            // Batch completed - extract SVG
+            const fileId = batchData.output_file_id;
+            if (!fileId) {
+              job.status = JobStatus.FAILED;
+              job.error = "No output file ID from batch";
+              return ok({ status: "error", error: job.error });
+            }
+            
+            const fileRes = await fetch(`${OPENAI_API}/files/${fileId}/content`, {
+              headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+            });
+            
+            if (!fileRes.ok) {
+              job.status = JobStatus.FAILED;
+              job.error = "Failed to fetch output file";
+              return ok({ status: "error", error: job.error });
+            }
+            
+            const fileText = await fileRes.text();
+            let svg = null;
+
+            for (const line of fileText.trim().split("\n")) {
+              if (!line.trim()) continue;
+              try {
+                const obj = JSON.parse(line);
+                const content = obj?.response?.body?.choices?.[0]?.message?.content || "";
+                const cleaned = content.replace(/```svg\n?/g, "").replace(/```\n?/g, "").trim();
+                const m = cleaned.match(/<svg[\s\S]*?<\/svg>/i);
+                if (m) { 
+                  svg = m[0]; 
+                  break; 
+                }
+              } catch (parseErr) {
+                console.warn("Failed to parse JSONL line:", parseErr);
+              }
+            }
+
+            if (!svg) {
+              job.status = JobStatus.FAILED;
+              job.error = "No SVG found in batch output";
+              return ok({ status: "error", error: job.error });
+            }
+            
+            // Update job with result
+            job.status = JobStatus.COMPLETED;
+            job.result = { generatedSvg: svg };
+            
+            return ok({ 
+              status: "completed", 
+              generatedSvg: svg,
+              feedback: job.feedback
+            });
+
+          } catch (err) {
+            console.error("SVG batch poll error:", err);
+            job.status = JobStatus.FAILED;
+            job.error = err.message;
+            return ok({ status: "error", error: err.message });
           }
-        } catch (parseErr) {
-          console.warn("Failed to parse JSONL line:", parseErr);
         }
+        
+        // For PNG jobs, just return current status
+        return ok({ status: job.status });
       }
 
-      if (!svg) {
-        return ok({ status: "error", error: "No SVG found in batch output", generatedSvg: null });
+      // Job completed or failed
+      if (job.status === JobStatus.COMPLETED) {
+        return ok({ 
+          status: "completed", 
+          ...job.result,
+          feedback: job.feedback
+        });
       }
-      
-      return ok({ status: "completed", generatedSvg: svg });
+
+      if (job.status === JobStatus.FAILED) {
+        return ok({ 
+          status: "error", 
+          error: job.error || "Job failed"
+        });
+      }
+
+      return ok({ status: job.status });
     }
 
     // -----------------------------------
-    // 1) FEEDBACK ONLY (non-map immediate)
+    // 1) FEEDBACK ONLY (quick help)
     // -----------------------------------
-    if (requestType === "help" || (requestType === "full-feedback" && !phase && taskType !== "maps")) {
-      const feedbackPrompt =
-        requestType === "help"
-          ? `You are an IELTS examiner. Give SHORT helpful hints (under 150 words) for improving this IELTS Task 1 answer:\n\n${content}`
-          : `You are an IELTS Task 1 examiner. Evaluate this answer based on:
-1. Task Achievement
-2. Coherence and Cohesion
-3. Lexical Resource
-4. Grammatical Range and Accuracy
-
-Make section titles bold with **Title**. Be specific and constructive.
-
-ANSWER:
-${content}`;
+    if (requestType === "help") {
+      const feedbackPrompt = `You are an IELTS examiner. Give SHORT helpful hints (under 150 words) for improving this IELTS Task 1 answer:\n\n${content}`;
 
       const fr = await fetch(`${OPENAI_API}/chat/completions`, {
         method: "POST",
@@ -136,147 +194,53 @@ ${content}`;
       }
       
       const fjson = await fr.json();
-      feedback = fjson?.choices?.[0]?.message?.content?.trim() || "Unable to generate feedback.";
+      const feedback = fjson?.choices?.[0]?.message?.content?.trim() || "Unable to generate feedback.";
       return ok({ feedback });
     }
 
-// --------------------------------------------------
-// 1.1) MAPS PRIMARY: PNG via images.generate (no phase)
-// --------------------------------------------------
-if (requestType === "full-feedback" && taskType === "maps" && !phase) {
-  console.log("🖼️ Attempting PNG generation via DALL-E 3...");
-  
-  try {
-    // First, get feedback text
-    const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
-          { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this map description based on:
-1. Task Achievement
-2. Coherence and Cohesion
-3. Lexical Resource
-4. Grammatical Range and Accuracy
+    // --------------------------------------------------
+    // 2) MAPS - SUBMIT PNG JOB (async DALL-E)
+    // --------------------------------------------------
+    if (requestType === "full-feedback" && taskType === "maps" && phase === "submit") {
+      console.log("🖼️ Submitting async PNG generation job...");
+      
+      const job_id = `png-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Create job entry
+      const job = {
+        id: job_id,
+        type: 'png_dalle',
+        status: JobStatus.PENDING,
+        createdAt: Date.now(),
+        content: content,
+        feedback: null,
+        result: null,
+        error: null
+      };
+      
+      jobStore.set(job_id, job);
 
-Make section titles bold with **Title**. Be specific and constructive.
+      // Start async processing (don't await)
+      processPngJob(job_id, content, OPENAI_API).catch(err => {
+        console.error("PNG job processing error:", err);
+        const j = jobStore.get(job_id);
+        if (j) {
+          j.status = JobStatus.FAILED;
+          j.error = err.message;
+        }
+      });
 
-ANSWER:
-${content}` },
-        ],
-        temperature: 0.7,
-      }),
-    });
-    
-    if (feedbackRes.ok) {
-      const feedbackJson = await feedbackRes.json();
-      feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "";
-    }
-
-    // Simplified prompt for better results
-    const imgPrompt = `Create a simple educational diagram showing a map comparison with two panels labeled 'BEFORE' and 'AFTER'.
-
-Style: Clean schematic diagram (not photorealistic)
-Layout: Two side-by-side panels showing the same location at different times
-Elements: Use simple shapes and icons for buildings, paths, trees, water features
-Colors: Blue for water, green for vegetation, grey for paths, yellow for buildings
-Labels: Clear text labels for all features
-
-Description to visualize:
-${content.substring(0, 900)}
-
-Make it look like an IELTS Task 1 educational diagram with clear, readable labels.`;
-
-    // Try with URL format first (more reliable)
-    const ir = await fetch(`${OPENAI_API}/images/generations`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "dall-e-3",
-        prompt: imgPrompt,
-        size: "1792x1024",
-        quality: "standard",
-        style: "natural", // Use 'natural' for more schematic look
-        n: 1
-        // Omit response_format to get URL by default
-      })
-    });
-
-    if (!ir.ok) {
-      const errorText = await ir.text();
-      console.warn(`⚠️ DALL-E 3 failed (${ir.status}): ${errorText}`);
       return ok({ 
-        status: "error", 
-        error: "PNG generation failed",
-        message: "Falling back to SVG batch processing"
+        job_id, 
+        status: "submitted",
+        message: "PNG generation started"
       });
     }
 
-    const ij = await ir.json();
-    const imageUrl = ij?.data?.[0]?.url;
-    
-    if (imageUrl) {
-      console.log("✅ PNG URL generated, converting to base64...");
-      
-      // Download the image and convert to base64
-      try {
-        const imageResponse = await fetch(imageUrl);
-        if (!imageResponse.ok) {
-          throw new Error(`Failed to download image: ${imageResponse.status}`);
-        }
-        
-        const imageBuffer = await imageResponse.arrayBuffer();
-        const base64 = Buffer.from(imageBuffer).toString('base64');
-        
-        console.log("✅ PNG converted to base64 successfully");
-        return ok({
-          status: "completed",
-          usedPipeline: "dall-e-3",
-          feedback: feedback || "**Task Achievement**: Map visualization generated successfully.",
-          generatedImageBase64: `data:image/png;base64,${base64}`
-        });
-      } catch (downloadError) {
-        console.error("Failed to download/convert image:", downloadError);
-        // Return URL anyway and let frontend handle it
-        return ok({
-          status: "completed",
-          usedPipeline: "dall-e-3",
-          feedback: feedback || "**Task Achievement**: Map visualization generated successfully.",
-          generatedImageUrl: imageUrl // Frontend can display this directly
-        });
-      }
-    }
-    
-    // No image in response
-    console.warn("⚠️ DALL-E 3 response missing image data");
-    return ok({ 
-      status: "error",
-      error: "No image data in response",
-      message: "Falling back to SVG batch processing"
-    });
-
-  } catch (pngError) {
-    console.error("❌ PNG generation error:", pngError.message);
-    return ok({ 
-      status: "error",
-      error: pngError.message,
-      message: "Falling back to SVG batch processing"
-    });
-  }
-}
-
-    // -------------------------------------------
-    // 2) MAPS FALLBACK: submit SVG batch (phase=submit)
-    // -------------------------------------------
-    if (requestType === "full-feedback" && taskType === "maps" && phase === "submit") {
+    // --------------------------------------------------
+    // 3) MAPS FALLBACK - SUBMIT SVG BATCH
+    // --------------------------------------------------
+    if (requestType === "full-feedback" && taskType === "maps" && phase === "submit-svg") {
       console.log("📦 Submitting SVG batch job (fallback)...");
       
       const batchRequest = {
@@ -288,8 +252,7 @@ Make it look like an IELTS Task 1 educational diagram with clear, readable label
           messages: [
             {
               role: "system",
-              content:
-                "You are an SVG diagram generator. Output ONLY valid SVG markup, no markdown, no backticks, no commentary."
+              content: "You are an SVG diagram generator. Output ONLY valid SVG markup, no markdown, no backticks, no commentary."
             },
             {
               role: "user",
@@ -376,8 +339,64 @@ ${content}`
           throw new Error("Batch response missing job ID");
         }
 
+        const job_id = `svg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Get feedback
+        let feedback = "";
+        try {
+          const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              messages: [
+                { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
+                { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this map description based on:
+1. Task Achievement
+2. Coherence and Cohesion
+3. Lexical Resource
+4. Grammatical Range and Accuracy
+
+Make section titles bold with **Title**. Be specific and constructive.
+
+ANSWER:
+${content}` },
+              ],
+              temperature: 0.7,
+            }),
+          });
+          
+          if (feedbackRes.ok) {
+            const feedbackJson = await feedbackRes.json();
+            feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "";
+          }
+        } catch (err) {
+          console.error("Feedback generation error:", err);
+        }
+
+        // Store job
+        const job = {
+          id: job_id,
+          type: 'svg_batch',
+          status: JobStatus.PROCESSING,
+          createdAt: Date.now(),
+          batchId: bj.id,
+          feedback: feedback,
+          result: null,
+          error: null
+        };
+        
+        jobStore.set(job_id, job);
+
         console.log(`✅ Batch job created: ${bj.id}`);
-        return ok({ job_id: bj.id, status: "submitted" });
+        return ok({ 
+          job_id, 
+          status: "submitted",
+          message: "SVG batch job created"
+        });
         
       } catch (batchError) {
         console.error("❌ Batch submission error:", batchError);
@@ -386,9 +405,13 @@ ${content}`
     }
 
     // --------------------------------------
-    // 3) Tables & Charts (E2B sandbox)
+    // 4) Tables & Charts (non-maps, immediate)
     // --------------------------------------
     if (requestType === "full-feedback" && taskType !== "maps") {
+      let feedback = "";
+      let asciiTable = null;
+      let generatedImageBase64 = null;
+
       // Get feedback first
       const fr = await fetch(`${OPENAI_API}/chat/completions`, {
         method: "POST",
@@ -458,7 +481,6 @@ ${content}`
         // Handle charts via E2B
         let sandbox = null;
         try {
-          // Generate Python code
           const cr = await fetch(`${OPENAI_API}/chat/completions`, {
             method: "POST",
             headers: {
@@ -470,20 +492,19 @@ ${content}`
               messages: [
                 { 
                   role: "system", 
-                  content: "You are a Python matplotlib code generator. Output ONLY executable Python code, no markdown, no explanations, no ```python blocks. Do NOT include plt.show()." 
+                  content: "You are a Python matplotlib code generator. Output ONLY executable Python code, no markdown, no explanations. Do NOT include plt.show()." 
                 },
                 { 
                   role: "user", 
                   content: `Extract ALL data from this description and generate clean matplotlib code to recreate the chart. 
-                  
+
 Requirements:
-- Import necessary libraries (matplotlib.pyplot as plt, numpy as np if needed)
+- Import necessary libraries
 - Extract all numerical data accurately
 - Choose appropriate chart type (${taskType})
-- Add title, axis labels, and legend where appropriate
+- Add title, axis labels, and legend
 - Use clear colors and styling
 - DO NOT include plt.show()
-- Save figure using plt.savefig() is optional
 
 Description:
 ${content}` 
@@ -504,7 +525,6 @@ ${content}`
               .trim();
 
             if (code) {
-              // Create sandbox and run code
               sandbox = await Sandbox.create({ 
                 apiKey: process.env.E2B_API_KEY, 
                 timeoutMs: 30000 
@@ -513,20 +533,17 @@ ${content}`
               console.log("Running matplotlib code...");
               const run = await sandbox.runCode(code);
               
-              // Check for PNG output
               if (run?.results) {
                 for (const r of run.results) {
                   if (r.png) {
                     generatedImageBase64 = `data:image/png;base64,${r.png}`;
-                    console.log("✅ Chart generated from results");
+                    console.log("✅ Chart generated");
                     break;
                   }
                 }
               }
               
-              // Fallback: explicitly save figure
               if (!generatedImageBase64) {
-                console.log("No PNG in results, trying explicit save...");
                 const saveCode = `
 import matplotlib.pyplot as plt
 import io
@@ -542,25 +559,16 @@ plt.close()
                 const b64 = (save?.logs?.stdout || []).join("").trim();
                 if (b64 && b64.length > 100) {
                   generatedImageBase64 = `data:image/png;base64,${b64}`;
-                  console.log("✅ Chart generated via explicit save");
                 }
-              }
-              
-              // Check for errors
-              if (run?.error) {
-                console.error("Code execution error:", run.error);
               }
             }
           }
         } catch (chartError) {
           console.error("Chart generation error:", chartError);
-          // Continue anyway, will return feedback without chart
         } finally {
-          // Always close sandbox
           if (sandbox) {
             try {
               await sandbox.close();
-              console.log("Sandbox closed");
             } catch (closeErr) {
               console.error("Failed to close sandbox:", closeErr);
             }
@@ -568,15 +576,12 @@ plt.close()
         }
       }
 
-      return ok({ feedback, asciiTable, generatedImageBase64, generatedSvg });
+      return ok({ feedback, asciiTable, generatedImageBase64 });
     }
 
     // Default fallback
     return ok({ 
-      feedback: "No operation matched your request.",
-      asciiTable, 
-      generatedImageBase64, 
-      generatedSvg 
+      feedback: "No operation matched your request."
     });
 
   } catch (err) {
@@ -584,6 +589,139 @@ plt.close()
     return fail(err);
   }
 };
+
+// Async PNG processing function
+async function processPngJob(job_id, content, OPENAI_API) {
+  const job = jobStore.get(job_id);
+  if (!job) return;
+
+  job.status = JobStatus.PROCESSING;
+  
+  try {
+    const fetch = globalThis.fetch;
+
+    // Get feedback
+    let feedback = "";
+    try {
+      const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
+            { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this map description based on:
+1. Task Achievement
+2. Coherence and Cohesion
+3. Lexical Resource
+4. Grammatical Range and Accuracy
+
+Make section titles bold with **Title**. Be specific and constructive.
+
+ANSWER:
+${content}` },
+          ],
+          temperature: 0.7,
+        }),
+      });
+      
+      if (feedbackRes.ok) {
+        const feedbackJson = await feedbackRes.json();
+        feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "";
+      }
+    } catch (err) {
+      console.error("Feedback generation error:", err);
+    }
+
+    job.feedback = feedback;
+
+    // Generate image
+    const imgPrompt = `Create a simple educational diagram showing a map comparison with two panels labeled 'BEFORE' and 'AFTER'.
+
+Style: Clean schematic diagram (not photorealistic)
+Layout: Two side-by-side panels showing the same location at different times
+Elements: Use simple shapes and icons for buildings, paths, trees, water features
+Colors: Blue for water, green for vegetation, grey for paths, yellow for buildings
+Labels: Clear text labels for all features
+
+Description to visualize:
+${content.substring(0, 900)}
+
+Make it look like an IELTS Task 1 educational diagram with clear, readable labels.`;
+
+    const ir = await fetch(`${OPENAI_API}/images/generations`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "dall-e-3",
+        prompt: imgPrompt,
+        size: "1792x1024",
+        quality: "standard",
+        style: "natural",
+        n: 1
+      })
+    });
+
+    if (!ir.ok) {
+      const errorText = await ir.text();
+      throw new Error(`DALL-E failed: ${ir.status} - ${errorText}`);
+    }
+
+    const ij = await ir.json();
+    const imageUrl = ij?.data?.[0]?.url;
+    
+    if (!imageUrl) {
+      throw new Error("No image URL in response");
+    }
+
+    console.log("✅ PNG URL generated, converting to base64...");
+    
+    // Download and convert to base64
+    const imageResponse = await fetch(imageUrl);
+    if (!imageResponse.ok) {
+      throw new Error(`Failed to download image: ${imageResponse.status}`);
+    }
+    
+    const imageBuffer = await imageResponse.arrayBuffer();
+    const base64 = Buffer.from(imageBuffer).toString('base64');
+    
+    // Update job with result
+    job.status = JobStatus.COMPLETED;
+    job.result = {
+      generatedImageBase64: `data:image/png;base64,${base64}`,
+      usedPipeline: "dall-e-3"
+    };
+
+    console.log(`✅ PNG job ${job_id} completed successfully`);
+
+    // Clean up old jobs (older than 1 hour)
+    cleanupOldJobs();
+
+  } catch (error) {
+    console.error(`❌ PNG job ${job_id} failed:`, error);
+    job.status = JobStatus.FAILED;
+    job.error = error.message;
+  }
+}
+
+// Cleanup function to prevent memory leaks
+function cleanupOldJobs() {
+  const ONE_HOUR = 60 * 60 * 1000;
+  const now = Date.now();
+  
+  for (const [jobId, job] of jobStore.entries()) {
+    if (now - job.createdAt > ONE_HOUR) {
+      jobStore.delete(jobId);
+      console.log(`🗑️ Cleaned up old job: ${jobId}`);
+    }
+  }
+}
 
 // Helper functions
 function ok(obj) {
