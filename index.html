@@ -386,7 +386,7 @@
         <li><strong>Write at least 150 words</strong> describing the visual information</li>
         <li>Click <strong>"Help me!"</strong> for quick tips while writing</li>
         <li>Click <strong>"Get Feedback"</strong> to see how well your description matches the image</li>
-        <li>For maps, the AI will generate an SVG based on your description (may take 1-2 minutes)</li>
+        <li>For maps, the AI will generate a visualization based on your description (may take 1-2 minutes)</li>
       </ul>
     </div>
 
@@ -431,11 +431,11 @@
       <textarea
         id="essay-input"
         placeholder="Write your description here. Remember to:
-• Write an overview statement
-• Describe key features and trends
-• Include specific data/numbers
-• Make comparisons where relevant
-• Write at least 150 words"
+- Write an overview statement
+- Describe key features and trends
+- Include specific data/numbers
+- Make comparisons where relevant
+- Write at least 150 words"
       ></textarea>
 
       <div class="button-container">
@@ -471,8 +471,6 @@
     <div id="comparison-container" style="display: none;"></div>
 
     <script type="module">
-
-      
       document.addEventListener("DOMContentLoaded", () => {
         const categorySelect = document.getElementById('category-select');
         const imageSelect = document.getElementById('image-select');
@@ -511,8 +509,6 @@
 
         // API endpoint
         const API_BASE = 'https://ubiquitous-malasada.netlify.app/.netlify/functions';
-        // Local deterministic map generator endpoint (Python)
-        const LOCAL_MAP_API = '/.netlify/functions/generate_map';
 
         // Progress bar functions
         function showProgressBar(taskType) {
@@ -521,7 +517,7 @@
           pollStatus.style.display = 'none';
           
           let label = taskType === 'maps' 
-            ? 'Submitting map generation job...' 
+            ? 'Preparing map generation...' 
             : taskType === 'table'
             ? 'Generating ASCII table...'
             : 'Generating chart...';
@@ -701,176 +697,96 @@
 
           const content = essayTextarea.value;
 
+          try {
+            // MAPS with full-feedback: Try PNG first, fallback to SVG batch
+            if (currentCategory === "maps" && type === "full-feedback") {
+              // Step 1: Try PNG generation (fast path)
+              showProgressBar('maps');
+              updateProgress(20, 'Attempting PNG generation...');
 
-if (currentCategory === "maps" && type === "full-feedback") {
-  // 1) Try PNG first (no phase)
-  showProgressBar('maps');
-  updateProgress(20, 'Generating PNG map...');
-
-  const pngTry = await fetch(`${API_BASE}/openai-proxy-task1`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      requestType: "full-feedback",
-      taskType: "maps",
-      content
-    })
-  });
-
-  const pngData = await pngTry.json();
-
-  if (pngData.status === "completed" && pngData.generatedImageBase64) {
-    // success — show PNG and stop
-    updateProgress(95, 'Finalizing...');
-    feedbackContainer.innerHTML = formatFullFeedback("**Task Achievement**: Map generated.\n\n**Coherence and Cohesion**: Visual provided.");
-    comparisonContainer.style.display = "block";
-    comparisonContainer.innerHTML = `
-      <div class="comparison-container">
-        <div class="comparison-side">
-          <h5>🗺️ Original Task Image</h5>
-          <img src="${currentImageUrl}" alt="Original map">
-        </div>
-        <div class="comparison-side">
-          <h5>🖼️ PNG Generated from Your Description</h5>
-          <img src="${pngData.generatedImageBase64}" alt="Generated map" style="max-width:100%;border-radius:4px;">
-        </div>
-      </div>`;
-    hideProgressBar();
-    isLoading = false; feedbackButton.disabled = false; helpButton.disabled = false;
-    return;
-  }
-
-  // 2) If PNG failed, fallback to SVG Batch
-  updateProgress(25, 'PNG failed — switching to SVG…');
-
-  const submitRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      phase: "submit",
-      requestType: "full-feedback",
-      taskType: "maps",
-      content
-    })
-  });
-
-  const submitData = await submitRes.json();
-  if (submitData.error || !submitData.job_id) {
-    hideProgressBar();
-    feedbackContainer.innerHTML = `<h4>Complete Feedback</h4><p class="error-message">⚠️ ${submitData.message || 'Failed to submit fallback job'}</p>`;
-    isLoading = false; feedbackButton.disabled = false; helpButton.disabled = false;
-    return;
-  }
-
-  const job_id = submitData.job_id;
-  pollStatus.style.display = 'block';
-  pollStatus.textContent = 'Checking job status…';
-
-  // poll every 2s (use your existing poll loop)
-  pollAttempts = 0;
-  if (pollInterval) clearInterval(pollInterval);
-  pollInterval = setInterval(pollForResults, 2000);
-
-  async function pollForResults() {
-    pollAttempts++;
-    const pollRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        phase: "poll",
-        requestType: "full-feedback",
-        taskType: "maps",
-        job_id
-      })
-    });
-    const pollData = await pollRes.json();
-    if (pollData.status === "completed" && pollData.generatedSvg) {
-      clearInterval(pollInterval);
-      updateProgress(95, 'Finalizing...');
-      feedbackContainer.innerHTML = formatFullFeedback("**Task Achievement**: SVG map generated (fallback).");
-      comparisonContainer.style.display = "block";
-      comparisonContainer.innerHTML = `
-        <div class="comparison-container">
-          <div class="comparison-side">
-            <h5>🗺️ Original Task Image</h5>
-            <img src="${currentImageUrl}" alt="Original map">
-          </div>
-          <div class="comparison-side">
-            <h5>🎨 SVG Generated from Your Description</h5>
-            <div style="background:white;padding:15px;border-radius:8px;border:2px solid #ddd;overflow:auto;min-height:400px;">
-              ${pollData.generatedSvg}
-            </div>
-          </div>
-        </div>`;
-      hideProgressBar();
-      isLoading = false; feedbackButton.disabled = false; helpButton.disabled = false;
-    } else if (pollData.status && pollData.status !== "error") {
-      const progress = Math.min(30 + (pollAttempts / MAX_POLL_ATTEMPTS) * 60, 90);
-      updateProgress(progress, 'Generating SVG…');
-      pollStatus.textContent = `Status: ${pollData.status} (attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS})`;
-      if (pollAttempts >= MAX_POLL_ATTEMPTS) {
-        clearInterval(pollInterval);
-        hideProgressBar();
-        feedbackContainer.innerHTML = `<h4>Complete Feedback</h4><p class="error-message">⚠️ Timeout: Map generation took too long.</p>`;
-        isLoading = false; feedbackButton.disabled = false; helpButton.disabled = false;
-      }
-    } else {
-      clearInterval(pollInterval);
-      hideProgressBar();
-      feedbackContainer.innerHTML = `<h4>Complete Feedback</h4><p class="error-message">⚠️ ${pollData.error || 'Fallback failed'}</p>`;
-      isLoading = false; feedbackButton.disabled = false; helpButton.disabled = false;
-    }
-  }
-
-  return; // stop the normal non-maps path
-}
-
-
-  // 🧠 Fallback path (OpenAI Batch job)
-  console.log("🧠 Using Batch Jobs for complex map");
-  showProgressBar('maps');
-
-              // 1) Submit job
-              updateProgress(20, 'Submitting map generation job...');
-              
-              const submitRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
+              const pngResponse = await fetch(`${API_BASE}/openai-proxy-task1`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  phase: "submit",
-                  requestType: type,
-                  taskType: currentCategory,
+                  requestType: "full-feedback",
+                  taskType: "maps",
                   content
                 })
               });
 
-              if (!submitRes.ok) {
-                throw new Error(`Submit failed: ${submitRes.status} ${submitRes.statusText}`);
+              if (!pngResponse.ok) {
+                throw new Error(`PNG request failed: ${pngResponse.status}`);
               }
 
-              const submitData = await submitRes.json();
+              const pngData = await pngResponse.json();
+
+              // If PNG succeeded, display it and we're done
+              if (pngData.status === "completed" && pngData.generatedImageBase64) {
+                updateProgress(95, 'Finalizing PNG result...');
+                
+                feedbackContainer.innerHTML = formatFullFeedback(
+                  pngData.feedback || "**Task Achievement**: Map generated successfully.\n\n**Coherence and Cohesion**: Visual provided."
+                );
+                
+                comparisonContainer.style.display = "block";
+                comparisonContainer.innerHTML = `
+                  <div class="comparison-container">
+                    <div class="comparison-side">
+                      <h5>🗺️ Original Task Image</h5>
+                      <img src="${currentImageUrl}" alt="Original map">
+                    </div>
+                    <div class="comparison-side">
+                      <h5>🖼️ PNG Generated from Your Description</h5>
+                      <img src="${pngData.generatedImageBase64}" alt="Generated map" style="max-width:100%;border-radius:4px;">
+                      <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
+                        Generated using DALL-E. AI can make mistakes, check carefully.
+                      </p>
+                    </div>
+                  </div>
+                `;
+                
+                hideProgressBar();
+                isLoading = false;
+                feedbackButton.disabled = false;
+                helpButton.disabled = false;
+                return;
+              }
+
+              // Step 2: PNG failed, fallback to SVG batch job
+              console.log("PNG generation failed, falling back to SVG batch job");
+              updateProgress(25, 'PNG failed — switching to SVG batch job...');
+
+              const submitResponse = await fetch(`${API_BASE}/openai-proxy-task1`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  phase: "submit",
+                  requestType: "full-feedback",
+                  taskType: "maps",
+                  content
+                })
+              });
+
+              if (!submitResponse.ok) {
+                throw new Error(`Submit failed: ${submitResponse.status}`);
+              }
+
+              const submitData = await submitResponse.json();
               
               if (submitData.error || !submitData.job_id) {
-                throw new Error(submitData.message || 'Failed to submit job');
+                throw new Error(submitData.message || 'Failed to submit SVG batch job');
               }
 
               const job_id = submitData.job_id;
-              console.log("✅ Job submitted:", job_id);
+              console.log("✅ SVG batch job submitted:", job_id);
 
-              feedbackContainer.innerHTML = `
-                <h4>Complete Feedback</h4>
-                <p>⏳ Generating map visualization... This may take 1-2 minutes.</p>
-                <p style="font-size: 13px; color: #666;">Job ID: ${job_id}</p>
-              `;
-
-              updateProgress(30, 'Map generation in progress...');
+              updateProgress(30, 'SVG generation in progress...');
               pollStatus.style.display = 'block';
               pollStatus.textContent = 'Checking job status...';
 
-              // 2) Poll for results
+              // Poll for SVG results
               pollAttempts = 0;
-              let svg = null;
-
+              
               const pollForResults = async () => {
                 pollAttempts++;
                 
@@ -884,63 +800,51 @@ if (currentCategory === "maps" && type === "full-feedback") {
                   
                   feedbackContainer.innerHTML = `
                     <h4>Complete Feedback</h4>
-                    <p class="error-message">⚠️ Timeout: Map generation took too long. Please try again.</p>
+                    <p class="error-message">⚠️ Timeout: SVG generation took too long. Please try again.</p>
                   `;
                   return;
                 }
 
                 const progress = Math.min(30 + (pollAttempts / MAX_POLL_ATTEMPTS) * 60, 90);
-                updateProgress(progress, 'Generating map...');
-                pollStatus.textContent = `Attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS} - Checking status...`;
+                updateProgress(progress, 'Generating SVG map...');
+                pollStatus.textContent = `Status check ${pollAttempts}/${MAX_POLL_ATTEMPTS}...`;
 
                 try {
-                  const pollRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
+                  const pollResponse = await fetch(`${API_BASE}/openai-proxy-task1`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                       phase: "poll",
-                      requestType: type,
-                      taskType: currentCategory,
+                      requestType: "full-feedback",
+                      taskType: "maps",
                       job_id
                     })
                   });
 
-                  if (!pollRes.ok) {
-                    throw new Error(`Poll failed: ${pollRes.status}`);
+                  if (!pollResponse.ok) {
+                    throw new Error(`Poll failed: ${pollResponse.status}`);
                   }
 
-                  const pollData = await pollRes.json();
+                  const pollData = await pollResponse.json();
                   console.log(`⏳ Poll ${pollAttempts}:`, pollData.status);
 
                   if (pollData.status === "error") {
                     clearInterval(pollInterval);
                     pollInterval = null;
-                    throw new Error(pollData.error || 'Job failed');
+                    throw new Error(pollData.error || 'SVG job failed');
                   }
 
                   if (pollData.status === "completed" && pollData.generatedSvg) {
-                    svg = pollData.generatedSvg;
                     clearInterval(pollInterval);
                     pollInterval = null;
                     
                     console.log("✅ SVG received");
                     updateProgress(95, 'Finalizing feedback...');
                     
-                    // Get feedback text
-                    const fbRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        requestType: "help",
-                        content,
-                        taskType: currentCategory
-                      })
-                    });
+                    feedbackContainer.innerHTML = formatFullFeedback(
+                      pollData.feedback || "**Task Achievement**: SVG map generated successfully (fallback method)."
+                    );
 
-                    const fbData = await fbRes.json();
-                    feedbackContainer.innerHTML = formatFullFeedback(fbData.feedback);
-
-                    // Display comparison
                     comparisonContainer.style.display = "block";
                     comparisonContainer.innerHTML = `
                       <div class="comparison-container">
@@ -961,8 +865,11 @@ if (currentCategory === "maps" && type === "full-feedback") {
                             justify-content: center;
                             align-items: center;
                           ">
-                            ${svg}
+                            ${pollData.generatedSvg}
                           </div>
+                          <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
+                            Generated using batch processing. AI can make mistakes, check carefully.
+                          </p>
                         </div>
                       </div>
                     `;
@@ -971,6 +878,9 @@ if (currentCategory === "maps" && type === "full-feedback") {
                     isLoading = false;
                     feedbackButton.disabled = false;
                     helpButton.disabled = false;
+                  } else if (pollData.status && pollData.status !== "error") {
+                    // Job still processing, continue polling
+                    pollStatus.textContent = `Status: ${pollData.status} (attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS})`;
                   }
                 } catch (pollError) {
                   console.error('Poll error:', pollError);
@@ -988,20 +898,20 @@ if (currentCategory === "maps" && type === "full-feedback") {
                 }
               };
 
-              // Poll every 2 seconds
+              // Start polling every 2 seconds
+              if (pollInterval) clearInterval(pollInterval);
               pollInterval = setInterval(pollForResults, 2000);
-              // Also run immediately
-              pollForResults();
+              pollForResults(); // Run immediately
               
-              return; // Don't proceed to non-maps logic
+              return; // Exit function, polling will handle the rest
             }
 
-            // NON-MAPS - regular feedback
+            // NON-MAPS feedback (help or full-feedback for other task types)
             if (type === 'help') {
               showProgressBar('help');
               updateProgress(50, 'Getting feedback...');
               
-              const res = await fetch(`${API_BASE}/openai-proxy-task1`, {
+              const response = await fetch(`${API_BASE}/openai-proxy-task1`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1011,11 +921,11 @@ if (currentCategory === "maps" && type === "full-feedback") {
                 })
               });
 
-              if (!res.ok) {
-                throw new Error(`Request failed: ${res.status}`);
+              if (!response.ok) {
+                throw new Error(`Request failed: ${response.status}`);
               }
 
-              const data = await res.json();
+              const data = await response.json();
               
               if (data.error) {
                 throw new Error(data.message || 'Feedback generation failed');
@@ -1025,10 +935,11 @@ if (currentCategory === "maps" && type === "full-feedback") {
               hideProgressBar();
               
             } else if (type === 'full-feedback') {
+              // Full feedback for non-maps
               showProgressBar(currentCategory);
               updateProgress(30, 'Generating visualization...');
 
-              const res = await fetch(`${API_BASE}/openai-proxy-task1`, {
+              const response = await fetch(`${API_BASE}/openai-proxy-task1`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1040,11 +951,11 @@ if (currentCategory === "maps" && type === "full-feedback") {
                 })
               });
 
-              if (!res.ok) {
-                throw new Error(`Request failed: ${res.status}`);
+              if (!response.ok) {
+                throw new Error(`Request failed: ${response.status}`);
               }
 
-              const data = await res.json();
+              const data = await response.json();
 
               if (data.error) {
                 throw new Error(data.message || 'Feedback generation failed');
@@ -1085,6 +996,9 @@ if (currentCategory === "maps" && type === "full-feedback") {
                 <div class="comparison-side">
                   <h5>🧮 ASCII Table from Your Description</h5>
                   <pre style="background:#fafafa; padding:15px; border-radius:4px; border:1px solid #ddd; font-family:monospace; overflow-x:auto;">${data.asciiTable}</pre>
+                  <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
+                    Generated based on your description. AI can make mistakes, check carefully.
+                  </p>
                 </div>
               </div>
             `;
