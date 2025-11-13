@@ -140,25 +140,25 @@ ${content}`;
       return ok({ feedback });
     }
 
-    // --------------------------------------------------
-    // 1.1) MAPS PRIMARY: PNG via images.generate (no phase)
-    // --------------------------------------------------
-    if (requestType === "full-feedback" && taskType === "maps" && !phase) {
-      console.log("🖼️ Attempting PNG generation via ChatGPT...");
-      
-      try {
-        // First, get feedback text
-        const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "gpt-4o-mini",
-            messages: [
-              { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
-              { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this map description based on:
+// --------------------------------------------------
+// 1.1) MAPS PRIMARY: PNG via images.generate (no phase)
+// --------------------------------------------------
+if (requestType === "full-feedback" && taskType === "maps" && !phase) {
+  console.log("🖼️ Attempting PNG generation via DALL-E 3...");
+  
+  try {
+    // First, get feedback text
+    const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
+          { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this map description based on:
 1. Task Achievement
 2. Coherence and Cohesion
 3. Lexical Resource
@@ -168,88 +168,110 @@ Make section titles bold with **Title**. Be specific and constructive.
 
 ANSWER:
 ${content}` },
-            ],
-            temperature: 0.7,
-          }),
-        });
-        
-        if (feedbackRes.ok) {
-          const feedbackJson = await feedbackRes.json();
-          feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "";
+        ],
+        temperature: 0.7,
+      }),
+    });
+    
+    if (feedbackRes.ok) {
+      const feedbackJson = await feedbackRes.json();
+      feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "";
+    }
+
+    // Simplified prompt for better results
+    const imgPrompt = `Create a simple educational diagram showing a map comparison with two panels labeled 'BEFORE' and 'AFTER'.
+
+Style: Clean schematic diagram (not photorealistic)
+Layout: Two side-by-side panels showing the same location at different times
+Elements: Use simple shapes and icons for buildings, paths, trees, water features
+Colors: Blue for water, green for vegetation, grey for paths, yellow for buildings
+Labels: Clear text labels for all features
+
+Description to visualize:
+${content.substring(0, 900)}
+
+Make it look like an IELTS Task 1 educational diagram with clear, readable labels.`;
+
+    // Try with URL format first (more reliable)
+    const ir = await fetch(`${OPENAI_API}/images/generations`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "dall-e-3",
+        prompt: imgPrompt,
+        size: "1792x1024",
+        quality: "standard",
+        style: "natural", // Use 'natural' for more schematic look
+        n: 1
+        // Omit response_format to get URL by default
+      })
+    });
+
+    if (!ir.ok) {
+      const errorText = await ir.text();
+      console.warn(`⚠️ DALL-E 3 failed (${ir.status}): ${errorText}`);
+      return ok({ 
+        status: "error", 
+        error: "PNG generation failed",
+        message: "Falling back to SVG batch processing"
+      });
+    }
+
+    const ij = await ir.json();
+    const imageUrl = ij?.data?.[0]?.url;
+    
+    if (imageUrl) {
+      console.log("✅ PNG URL generated, converting to base64...");
+      
+      // Download the image and convert to base64
+      try {
+        const imageResponse = await fetch(imageUrl);
+        if (!imageResponse.ok) {
+          throw new Error(`Failed to download image: ${imageResponse.status}`);
         }
-
-        // Attempt PNG generation
-        const imgPrompt = `Create a simple, schematic diagram showing a map transformation with two panels labeled 'BEFORE' and 'AFTER'.
-
-Style requirements:
-- Clean, educational diagram style (not photorealistic)
-- Simple geometric shapes for buildings, paths, and natural features
-- Clear labels for all elements
-- Use basic colors: blue for water, green for vegetation, grey for paths/roads, yellow/beige for buildings
-- Top-down view, schematic layout
-- Readable text labels
-
-Based on this description:
-${content.substring(0, 800)}`;
-
-        const ir = await fetch(`${OPENAI_API}/images/generations`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: "gpt-image-1",
-            prompt: imgPrompt,
-            size: "1024x1024",
-            quality: "standard",
-            response_format: "b64_json",
-            n: 1
-          })
-        });
-
-        if (!ir.ok) {
-          const errorText = await ir.text();
-          console.warn(`⚠️ ChatGPT failed (${ir.status}): ${errorText}`);
-          // Signal fallback needed without throwing
-          return ok({ 
-            status: "error", 
-            error: "PNG generation failed",
-            message: "Falling back to SVG batch processing"
-          });
-        }
-
-        const ij = await ir.json();
-        const b64 = ij?.data?.[0]?.b64_json;
         
-        if (b64) {
-          console.log("✅ PNG generated successfully");
-          return ok({
-            status: "completed",
-            usedPipeline: "gpt-image-1",
-            feedback: feedback || "**Task Achievement**: Map visualization generated successfully.",
-            generatedImageBase64: `data:image/png;base64,${b64}`
-          });
-        }
+        const imageBuffer = await imageResponse.arrayBuffer();
+        const base64 = Buffer.from(imageBuffer).toString('base64');
         
-        // No image in response
-        console.warn("⚠️ ChatGPT response missing image data");
-        return ok({ 
-          status: "error",
-          error: "No image data in response",
-          message: "Falling back to SVG batch processing"
+        console.log("✅ PNG converted to base64 successfully");
+        return ok({
+          status: "completed",
+          usedPipeline: "dall-e-3",
+          feedback: feedback || "**Task Achievement**: Map visualization generated successfully.",
+          generatedImageBase64: `data:image/png;base64,${base64}`
         });
-
-      } catch (pngError) {
-        console.error("❌ PNG generation error:", pngError.message);
-        // Return error status to trigger fallback
-        return ok({ 
-          status: "error",
-          error: pngError.message,
-          message: "Falling back to SVG batch processing"
+      } catch (downloadError) {
+        console.error("Failed to download/convert image:", downloadError);
+        // Return URL anyway and let frontend handle it
+        return ok({
+          status: "completed",
+          usedPipeline: "dall-e-3",
+          feedback: feedback || "**Task Achievement**: Map visualization generated successfully.",
+          generatedImageUrl: imageUrl // Frontend can display this directly
         });
       }
     }
+    
+    // No image in response
+    console.warn("⚠️ DALL-E 3 response missing image data");
+    return ok({ 
+      status: "error",
+      error: "No image data in response",
+      message: "Falling back to SVG batch processing"
+    });
+
+  } catch (pngError) {
+    console.error("❌ PNG generation error:", pngError.message);
+    return ok({ 
+      status: "error",
+      error: pngError.message,
+      message: "Falling back to SVG batch processing"
+    });
+  }
+}
 
     // -------------------------------------------
     // 2) MAPS FALLBACK: submit SVG batch (phase=submit)
