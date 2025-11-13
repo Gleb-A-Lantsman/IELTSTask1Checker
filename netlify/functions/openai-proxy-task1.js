@@ -1,7 +1,14 @@
 // openai-proxy-task1.js
-// Async processing for both DALL-E PNG and SVG generation
+// Async processing for DALL-E PNG with Upstash Redis for job storage
 
 const { Sandbox } = require("@e2b/code-interpreter");
+const { Redis } = require("@upstash/redis");
+
+// Initialize Upstash Redis
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
 // Use undici's Blob/FormData for batch upload
 let UndiciBlob, UndiciFormData;
@@ -14,9 +21,6 @@ try {
 }
 const useBlob = UndiciBlob || globalThis.Blob;
 const useFormData = UndiciFormData || globalThis.FormData;
-
-// In-memory job storage (use Redis/DynamoDB in production)
-const jobStore = new Map();
 
 // Job status types
 const JobStatus = {
@@ -46,15 +50,19 @@ exports.handler = async (event) => {
     // 0) POLL ANY JOB (PNG or SVG)
     // ---------------------------
     if (phase === "poll" && job_id) {
-      const job = jobStore.get(job_id);
+      console.log(`🔍 Polling job: ${job_id}`);
       
-      if (!job) {
+      const jobData = await redis.get(job_id);
+      
+      if (!jobData) {
         return ok({ 
           status: "error", 
           error: "Job not found",
           message: "Job may have expired or invalid job_id"
         });
       }
+
+      const job = typeof jobData === 'string' ? JSON.parse(jobData) : jobData;
 
       // If job is still processing, check its type
       if (job.status === JobStatus.PROCESSING || job.status === JobStatus.PENDING) {
@@ -68,6 +76,7 @@ exports.handler = async (event) => {
             if (!jobRes.ok) {
               job.status = JobStatus.FAILED;
               job.error = `Failed to fetch batch status: ${jobRes.status}`;
+              await redis.setex(job_id, 3600, JSON.stringify(job));
               return ok({ status: "error", error: job.error });
             }
             
@@ -76,6 +85,7 @@ exports.handler = async (event) => {
             if (["failed", "expired", "cancelled"].includes(batchData.status)) {
               job.status = JobStatus.FAILED;
               job.error = `Batch job ${batchData.status}`;
+              await redis.setex(job_id, 3600, JSON.stringify(job));
               return ok({ status: "error", error: job.error });
             }
             
@@ -88,6 +98,7 @@ exports.handler = async (event) => {
             if (!fileId) {
               job.status = JobStatus.FAILED;
               job.error = "No output file ID from batch";
+              await redis.setex(job_id, 3600, JSON.stringify(job));
               return ok({ status: "error", error: job.error });
             }
             
@@ -98,6 +109,7 @@ exports.handler = async (event) => {
             if (!fileRes.ok) {
               job.status = JobStatus.FAILED;
               job.error = "Failed to fetch output file";
+              await redis.setex(job_id, 3600, JSON.stringify(job));
               return ok({ status: "error", error: job.error });
             }
             
@@ -123,13 +135,16 @@ exports.handler = async (event) => {
             if (!svg) {
               job.status = JobStatus.FAILED;
               job.error = "No SVG found in batch output";
+              await redis.setex(job_id, 3600, JSON.stringify(job));
               return ok({ status: "error", error: job.error });
             }
             
             // Update job with result
             job.status = JobStatus.COMPLETED;
             job.result = { generatedSvg: svg };
+            await redis.setex(job_id, 3600, JSON.stringify(job));
             
+            console.log(`✅ SVG job ${job_id} completed`);
             return ok({ 
               status: "completed", 
               generatedSvg: svg,
@@ -140,6 +155,7 @@ exports.handler = async (event) => {
             console.error("SVG batch poll error:", err);
             job.status = JobStatus.FAILED;
             job.error = err.message;
+            await redis.setex(job_id, 3600, JSON.stringify(job));
             return ok({ status: "error", error: err.message });
           }
         }
@@ -218,16 +234,13 @@ exports.handler = async (event) => {
         error: null
       };
       
-      jobStore.set(job_id, job);
+      // Store in Redis with 1 hour expiration
+      await redis.setex(job_id, 3600, JSON.stringify(job));
+      console.log(`✅ Job stored in Redis: ${job_id}`);
 
       // Start async processing (don't await)
-      processPngJob(job_id, content, OPENAI_API).catch(err => {
+      processPngJob(job_id, content, OPENAI_API, redis).catch(err => {
         console.error("PNG job processing error:", err);
-        const j = jobStore.get(job_id);
-        if (j) {
-          j.status = JobStatus.FAILED;
-          j.error = err.message;
-        }
       });
 
       return ok({ 
@@ -377,7 +390,7 @@ ${content}` },
           console.error("Feedback generation error:", err);
         }
 
-        // Store job
+        // Store job in Redis
         const job = {
           id: job_id,
           type: 'svg_batch',
@@ -389,7 +402,7 @@ ${content}` },
           error: null
         };
         
-        jobStore.set(job_id, job);
+        await redis.setex(job_id, 3600, JSON.stringify(job));
 
         console.log(`✅ Batch job created: ${bj.id}`);
         return ok({ 
@@ -591,11 +604,16 @@ plt.close()
 };
 
 // Async PNG processing function
-async function processPngJob(job_id, content, OPENAI_API) {
-  const job = jobStore.get(job_id);
-  if (!job) return;
+async function processPngJob(job_id, content, OPENAI_API, redis) {
+  const jobData = await redis.get(job_id);
+  if (!jobData) {
+    console.error(`Job ${job_id} not found in Redis`);
+    return;
+  }
 
+  const job = typeof jobData === 'string' ? JSON.parse(jobData) : jobData;
   job.status = JobStatus.PROCESSING;
+  await redis.setex(job_id, 3600, JSON.stringify(job));
   
   try {
     const fetch = globalThis.fetch;
@@ -637,6 +655,7 @@ ${content}` },
     }
 
     job.feedback = feedback;
+    await redis.setex(job_id, 3600, JSON.stringify(job));
 
     // Generate image
     const imgPrompt = `Create a simple educational diagram showing a map comparison with two panels labeled 'BEFORE' and 'AFTER'.
@@ -652,6 +671,7 @@ ${content.substring(0, 900)}
 
 Make it look like an IELTS Task 1 educational diagram with clear, readable labels.`;
 
+    console.log(`🎨 Generating DALL-E image for job ${job_id}...`);
     const ir = await fetch(`${OPENAI_API}/images/generations`, {
       method: "POST",
       headers: {
@@ -697,29 +717,15 @@ Make it look like an IELTS Task 1 educational diagram with clear, readable label
       generatedImageBase64: `data:image/png;base64,${base64}`,
       usedPipeline: "dall-e-3"
     };
+    await redis.setex(job_id, 3600, JSON.stringify(job));
 
     console.log(`✅ PNG job ${job_id} completed successfully`);
-
-    // Clean up old jobs (older than 1 hour)
-    cleanupOldJobs();
 
   } catch (error) {
     console.error(`❌ PNG job ${job_id} failed:`, error);
     job.status = JobStatus.FAILED;
     job.error = error.message;
-  }
-}
-
-// Cleanup function to prevent memory leaks
-function cleanupOldJobs() {
-  const ONE_HOUR = 60 * 60 * 1000;
-  const now = Date.now();
-  
-  for (const [jobId, job] of jobStore.entries()) {
-    if (now - job.createdAt > ONE_HOUR) {
-      jobStore.delete(jobId);
-      console.log(`🗑️ Cleaned up old job: ${jobId}`);
-    }
+    await redis.setex(job_id, 3600, JSON.stringify(job));
   }
 }
 
