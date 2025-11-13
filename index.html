@@ -702,31 +702,92 @@
           const content = essayTextarea.value;
 
           try {
-            // MAPS category
 if (currentCategory === "maps" && type === "full-feedback") {
-  const content = essayTextarea.value.trim();
+  // 1) Try PNG first (no phase)
+  showProgressBar('maps');
+  updateProgress(20, 'Generating PNG map...');
 
-  // ✅ Fast deterministic path (local SVG render)
-  if (!content.match(/north|south|east|west|road|street|housing|factory|school|airport|university|river|town|village|industrial/i)) {
-    console.log("⚡ Using local deterministic Python renderer");
-    showProgressBar('maps');
-    updateProgress(40, 'Generating local SVG map...');
+  const pngTry = await fetch(`${API_BASE}/openai-proxy-task1`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      requestType: "full-feedback",
+      taskType: "maps",
+      content
+    })
+  });
 
-    try {
-      const res = await fetch(LOCAL_MAP_API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content })
-      });
+  const pngData = await pngTry.json();
 
-      if (!res.ok) throw new Error(`Local map API failed (${res.status})`);
-      const svg = await res.text();
+  if (pngData.status === "completed" && pngData.generatedImageBase64) {
+    // success — show PNG and stop
+    updateProgress(95, 'Finalizing...');
+    feedbackContainer.innerHTML = formatFullFeedback("**Task Achievement**: Map generated.\n\n**Coherence and Cohesion**: Visual provided.");
+    comparisonContainer.style.display = "block";
+    comparisonContainer.innerHTML = `
+      <div class="comparison-container">
+        <div class="comparison-side">
+          <h5>🗺️ Original Task Image</h5>
+          <img src="${currentImageUrl}" alt="Original map">
+        </div>
+        <div class="comparison-side">
+          <h5>🖼️ PNG Generated from Your Description</h5>
+          <img src="${pngData.generatedImageBase64}" alt="Generated map" style="max-width:100%;border-radius:4px;">
+        </div>
+      </div>`;
+    hideProgressBar();
+    isLoading = false; feedbackButton.disabled = false; helpButton.disabled = false;
+    return;
+  }
 
-      hideProgressBar();
-      feedbackContainer.innerHTML = `
-        <h4>Map Visualization</h4>
-        <p>✅ Generated instantly using the local Python SVG renderer.</p>
-      `;
+  // 2) If PNG failed, fallback to SVG Batch
+  updateProgress(25, 'PNG failed — switching to SVG…');
+
+  const submitRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      phase: "submit",
+      requestType: "full-feedback",
+      taskType: "maps",
+      content
+    })
+  });
+
+  const submitData = await submitRes.json();
+  if (submitData.error || !submitData.job_id) {
+    hideProgressBar();
+    feedbackContainer.innerHTML = `<h4>Complete Feedback</h4><p class="error-message">⚠️ ${submitData.message || 'Failed to submit fallback job'}</p>`;
+    isLoading = false; feedbackButton.disabled = false; helpButton.disabled = false;
+    return;
+  }
+
+  const job_id = submitData.job_id;
+  pollStatus.style.display = 'block';
+  pollStatus.textContent = 'Checking job status…';
+
+  // poll every 2s (use your existing poll loop)
+  pollAttempts = 0;
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(pollForResults, 2000);
+
+  async function pollForResults() {
+    pollAttempts++;
+    const pollRes = await fetch(`${API_BASE}/openai-proxy-task1`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        phase: "poll",
+        requestType: "full-feedback",
+        taskType: "maps",
+        job_id
+      })
+    });
+    const pollData = await pollRes.json();
+    if (pollData.status === "completed" && pollData.generatedSvg) {
+      clearInterval(pollInterval);
+      updateProgress(95, 'Finalizing...');
+      feedbackContainer.innerHTML = formatFullFeedback("**Task Achievement**: SVG map generated (fallback).");
       comparisonContainer.style.display = "block";
       comparisonContainer.innerHTML = `
         <div class="comparison-container">
@@ -736,27 +797,34 @@ if (currentCategory === "maps" && type === "full-feedback") {
           </div>
           <div class="comparison-side">
             <h5>🎨 SVG Generated from Your Description</h5>
-            <div style="background:white;padding:15px;border-radius:8px;border:2px solid #ddd;overflow:auto;min-height:400px;display:flex;justify-content:center;align-items:center;">
-              ${svg}
+            <div style="background:white;padding:15px;border-radius:8px;border:2px solid #ddd;overflow:auto;min-height:400px;">
+              ${pollData.generatedSvg}
             </div>
           </div>
         </div>`;
-      isLoading = false;
-      feedbackButton.disabled = false;
-      helpButton.disabled = false;
-      return; // done
-    } catch (localErr) {
-      console.error("Local map render failed:", localErr);
-      feedbackContainer.innerHTML = `
-        <h4>Map Visualization</h4>
-        <p class="error-message">⚠️ Local SVG generation failed: ${localErr.message}</p>`;
       hideProgressBar();
-      isLoading = false;
-      feedbackButton.disabled = false;
-      helpButton.disabled = false;
-      return;
+      isLoading = false; feedbackButton.disabled = false; helpButton.disabled = false;
+    } else if (pollData.status && pollData.status !== "error") {
+      const progress = Math.min(30 + (pollAttempts / MAX_POLL_ATTEMPTS) * 60, 90);
+      updateProgress(progress, 'Generating SVG…');
+      pollStatus.textContent = `Status: ${pollData.status} (attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS})`;
+      if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+        clearInterval(pollInterval);
+        hideProgressBar();
+        feedbackContainer.innerHTML = `<h4>Complete Feedback</h4><p class="error-message">⚠️ Timeout: Map generation took too long.</p>`;
+        isLoading = false; feedbackButton.disabled = false; helpButton.disabled = false;
+      }
+    } else {
+      clearInterval(pollInterval);
+      hideProgressBar();
+      feedbackContainer.innerHTML = `<h4>Complete Feedback</h4><p class="error-message">⚠️ ${pollData.error || 'Fallback failed'}</p>`;
+      isLoading = false; feedbackButton.disabled = false; helpButton.disabled = false;
     }
   }
+
+  return; // stop the normal non-maps path
+}
+
 
   // 🧠 Fallback path (OpenAI Batch job)
   console.log("🧠 Using Batch Jobs for complex map");
