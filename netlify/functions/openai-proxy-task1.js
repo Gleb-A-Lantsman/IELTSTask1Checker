@@ -43,6 +43,11 @@ exports.handler = async (event) => {
       const jobRes = await fetch(`${OPENAI_API}/batches/${job_id}`, {
         headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
       });
+      
+      if (!jobRes.ok) {
+        return ok({ status: "error", error: `Failed to fetch batch status: ${jobRes.status}`, generatedSvg: null });
+      }
+      
       const jobData = await jobRes.json();
 
       if (["failed", "expired", "cancelled"].includes(jobData.status)) {
@@ -54,23 +59,41 @@ exports.handler = async (event) => {
 
       // Completed: read JSONL output and extract SVG
       const fileId = jobData.output_file_id;
+      if (!fileId) {
+        return ok({ status: "error", error: "No output file ID from batch", generatedSvg: null });
+      }
+      
       const fileRes = await fetch(`${OPENAI_API}/files/${fileId}/content`, {
         headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
       });
+      
+      if (!fileRes.ok) {
+        return ok({ status: "error", error: "Failed to fetch output file", generatedSvg: null });
+      }
+      
       const fileText = await fileRes.text();
       let svg = null;
 
       for (const line of fileText.trim().split("\n")) {
+        if (!line.trim()) continue;
         try {
           const obj = JSON.parse(line);
           const content = obj?.response?.body?.choices?.[0]?.message?.content || "";
           const cleaned = content.replace(/```svg\n?/g, "").replace(/```\n?/g, "").trim();
           const m = cleaned.match(/<svg[\s\S]*?<\/svg>/i);
-          if (m) { svg = m[0]; break; }
-        } catch { /* ignore */ }
+          if (m) { 
+            svg = m[0]; 
+            break; 
+          }
+        } catch (parseErr) {
+          console.warn("Failed to parse JSONL line:", parseErr);
+        }
       }
 
-      if (!svg) return ok({ status: "error", error: "No SVG generated", generatedSvg: null });
+      if (!svg) {
+        return ok({ status: "error", error: "No SVG found in batch output", generatedSvg: null });
+      }
+      
       return ok({ status: "completed", generatedSvg: svg });
     }
 
@@ -104,10 +127,16 @@ ${content}`;
             { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
             { role: "user", content: feedbackPrompt },
           ],
+          temperature: 0.7,
         }),
       });
+      
+      if (!fr.ok) {
+        throw new Error(`OpenAI API failed: ${fr.status}`);
+      }
+      
       const fjson = await fr.json();
-      feedback = fjson?.choices?.[0]?.message?.content?.trim() || "";
+      feedback = fjson?.choices?.[0]?.message?.content?.trim() || "Unable to generate feedback.";
       return ok({ feedback });
     }
 
@@ -115,15 +144,53 @@ ${content}`;
     // 1.1) MAPS PRIMARY: PNG via images.generate (no phase)
     // --------------------------------------------------
     if (requestType === "full-feedback" && taskType === "maps" && !phase) {
+      console.log("🖼️ Attempting PNG generation via DALL-E 3...");
+      
       try {
-        const imgPrompt = `
-Create a clean, formal IELTS Writing Task 1 style educational diagram.
-Two side-by-side panels labelled 'BEFORE' and 'AFTER'.
-Use small, simple icons for: trees, huts, reception, restaurant, footpath, pier, beach.
-Colours: blue for sea, green for land, grey for paths/roads, yellow for buildings. Minimal palette.
-Very clear labels, readable text, no artistic textures, schematic layout only.
-Text to visualize:
-${content}`.trim();
+        // First, get feedback text
+        const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
+              { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this map description based on:
+1. Task Achievement
+2. Coherence and Cohesion
+3. Lexical Resource
+4. Grammatical Range and Accuracy
+
+Make section titles bold with **Title**. Be specific and constructive.
+
+ANSWER:
+${content}` },
+            ],
+            temperature: 0.7,
+          }),
+        });
+        
+        if (feedbackRes.ok) {
+          const feedbackJson = await feedbackRes.json();
+          feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "";
+        }
+
+        // Attempt PNG generation
+        const imgPrompt = `Create a simple, schematic diagram showing a map transformation with two panels labeled 'BEFORE' and 'AFTER'.
+
+Style requirements:
+- Clean, educational diagram style (not photorealistic)
+- Simple geometric shapes for buildings, paths, and natural features
+- Clear labels for all elements
+- Use basic colors: blue for water, green for vegetation, grey for paths/roads, yellow/beige for buildings
+- Top-down view, schematic layout
+- Readable text labels
+
+Based on this description:
+${content.substring(0, 800)}`;
 
         const ir = await fetch(`${OPENAI_API}/images/generations`, {
           method: "POST",
@@ -134,30 +201,53 @@ ${content}`.trim();
           body: JSON.stringify({
             model: "gpt-image-1",
             prompt: imgPrompt,
-            size: "1024x512",
-            response_format: "b64_json"
+            size: "1024x1024",
+            quality: "standard",
+            response_format: "b64_json",
+            n: 1
           })
         });
 
         if (!ir.ok) {
-          // fall back to SVG
-          return ok({ status: "fallback" });
+          const errorText = await ir.text();
+          console.warn(`⚠️ DALL-E 3 failed (${ir.status}): ${errorText}`);
+          // Signal fallback needed without throwing
+          return ok({ 
+            status: "error", 
+            error: "PNG generation failed",
+            message: "Falling back to SVG batch processing"
+          });
         }
 
         const ij = await ir.json();
         const b64 = ij?.data?.[0]?.b64_json;
+        
         if (b64) {
+          console.log("✅ PNG generated successfully");
           return ok({
             status: "completed",
-            usedPipeline: "image.generate",
+            usedPipeline: "gpt-image-1",
+            feedback: feedback || "**Task Achievement**: Map visualization generated successfully.",
             generatedImageBase64: `data:image/png;base64,${b64}`
           });
         }
-        // If no image returned, ask client to fallback
-        return ok({ status: "fallback" });
+        
+        // No image in response
+        console.warn("⚠️ DALL-E 3 response missing image data");
+        return ok({ 
+          status: "error",
+          error: "No image data in response",
+          message: "Falling back to SVG batch processing"
+        });
 
-      } catch {
-        return ok({ status: "fallback" });
+      } catch (pngError) {
+        console.error("❌ PNG generation error:", pngError.message);
+        // Return error status to trigger fallback
+        return ok({ 
+          status: "error",
+          error: pngError.message,
+          message: "Falling back to SVG batch processing"
+        });
       }
     }
 
@@ -165,6 +255,8 @@ ${content}`.trim();
     // 2) MAPS FALLBACK: submit SVG batch (phase=submit)
     // -------------------------------------------
     if (requestType === "full-feedback" && taskType === "maps" && phase === "submit") {
+      console.log("📦 Submitting SVG batch job (fallback)...");
+      
       const batchRequest = {
         custom_id: `map-${Date.now()}`,
         method: "POST",
@@ -182,61 +274,100 @@ ${content}`.trim();
               content: `Convert this IELTS Task 1 map description into a clean, accurate SVG diagram.
 
 Rules:
-- Output ONLY <svg>...</svg> with a proper viewBox
-- Clear labels and schematic shapes
-- Use blue for sea, green for land, grey for roads/paths, yellow for buildings where applicable
-- No raster images, only vector shapes
+- Output ONLY <svg>...</svg> with a proper viewBox (e.g., viewBox="0 0 800 600")
+- Create two side-by-side panels for BEFORE and AFTER
+- Use clear labels and simple geometric shapes
+- Use blue for sea/water, green for land/vegetation, grey for roads/paths, yellow for buildings
+- Include a legend if helpful
+- No raster images, only vector shapes (rect, circle, path, text, etc.)
+- Make text readable (font-size at least 14)
 
 DESCRIPTION:
 ${content}`
             }
           ],
-          max_tokens: 4000
+          max_tokens: 4000,
+          temperature: 0.3
         }
       };
 
-      // create multipart/form-data with JSONL line (no custom boundary)
-      const jsonlLine = JSON.stringify(batchRequest) + "\n";
-      const form = new useFormData();
-      form.append("purpose", "batch");
-      form.append("file", new useBlob([jsonlLine], { type: "application/jsonl" }), "batch_input.jsonl");
+      try {
+        // Create multipart/form-data with JSONL line
+        const jsonlLine = JSON.stringify(batchRequest) + "\n";
+        const form = new useFormData();
+        form.append("purpose", "batch");
+        form.append("file", new useBlob([jsonlLine], { type: "application/jsonl" }), "batch_input.jsonl");
 
-      const upload = await fetch(`${OPENAI_API}/files`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-        body: form
-      });
+        const upload = await fetch(`${OPENAI_API}/files`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+          body: form
+        });
 
-      const ct = upload.headers.get("content-type") || "";
-      const bodyText = await upload.text();
-      if (!upload.ok) throw new Error(`File upload failed: ${upload.status} ${bodyText}`);
+        const bodyText = await upload.text();
+        
+        if (!upload.ok) {
+          throw new Error(`File upload failed: ${upload.status} ${bodyText}`);
+        }
 
-      const fileId = (ct.includes("application/json") ? JSON.parse(bodyText) : {})?.id;
-      if (!fileId) throw new Error("Upload response missing file id");
+        let uploadData;
+        try {
+          uploadData = JSON.parse(bodyText);
+        } catch {
+          throw new Error("Invalid JSON response from file upload");
+        }
 
-      const br = await fetch(`${OPENAI_API}/batches`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          input_file_id: fileId,
-          endpoint: "/v1/chat/completions",
-          completion_window: "24h",
-          metadata: { source: "IELTS-map", type: "SVG-fallback" }
-        })
-      });
-      const bj = await br.json();
-      if (bj.error) throw new Error(bj.error.message);
+        const fileId = uploadData?.id;
+        if (!fileId) {
+          throw new Error("Upload response missing file id");
+        }
 
-      return ok({ job_id: bj.id, status: "submitted" });
+        console.log(`✅ File uploaded: ${fileId}`);
+
+        // Create batch job
+        const br = await fetch(`${OPENAI_API}/batches`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            input_file_id: fileId,
+            endpoint: "/v1/chat/completions",
+            completion_window: "24h",
+            metadata: { source: "IELTS-map", type: "SVG-fallback" }
+          })
+        });
+        
+        if (!br.ok) {
+          const errorText = await br.text();
+          throw new Error(`Batch creation failed: ${br.status} ${errorText}`);
+        }
+        
+        const bj = await br.json();
+        
+        if (bj.error) {
+          throw new Error(bj.error.message || "Batch creation error");
+        }
+        
+        if (!bj.id) {
+          throw new Error("Batch response missing job ID");
+        }
+
+        console.log(`✅ Batch job created: ${bj.id}`);
+        return ok({ job_id: bj.id, status: "submitted" });
+        
+      } catch (batchError) {
+        console.error("❌ Batch submission error:", batchError);
+        throw batchError;
+      }
     }
 
     // --------------------------------------
-    // 3) Tables & Charts (same as your build)
+    // 3) Tables & Charts (E2B sandbox)
     // --------------------------------------
     if (requestType === "full-feedback" && taskType !== "maps") {
+      // Get feedback first
       const fr = await fetch(`${OPENAI_API}/chat/completions`, {
         method: "POST",
         headers: {
@@ -247,21 +378,32 @@ ${content}`
           model: "gpt-4o-mini",
           messages: [
             { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
-            { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this answer based on:
+            { 
+              role: "user", 
+              content: `You are an IELTS Task 1 examiner. Evaluate this answer based on:
 1. Task Achievement
 2. Coherence and Cohesion
 3. Lexical Resource
 4. Grammatical Range and Accuracy
+
 Make section titles bold with **Title**. Be specific and constructive.
 
 ANSWER:
-${content}` },
+${content}` 
+            },
           ],
+          temperature: 0.7,
         }),
       });
+      
+      if (!fr.ok) {
+        throw new Error(`Feedback API failed: ${fr.status}`);
+      }
+      
       const fj = await fr.json();
-      feedback = fj?.choices?.[0]?.message?.content?.trim() || "";
+      feedback = fj?.choices?.[0]?.message?.content?.trim() || "Unable to generate feedback.";
 
+      // Handle tables
       if (taskType === "table") {
         const ar = await fetch(`${OPENAI_API}/chat/completions`, {
           method: "POST",
@@ -272,16 +414,29 @@ ${content}` },
           body: JSON.stringify({
             model: "gpt-4o-mini",
             messages: [
-              { role: "system", content: "Convert descriptions into precise ASCII tables with | borders." },
-              { role: "user", content: `Output ONLY the ASCII table:\n\n${content}` },
+              { 
+                role: "system", 
+                content: "You are an ASCII table generator. Convert descriptions into precise ASCII tables using | borders and proper alignment. Output ONLY the table, no explanations." 
+              },
+              { 
+                role: "user", 
+                content: `Create an ASCII table based on this description. Use | for borders and align columns properly:\n\n${content}` 
+              },
             ],
+            temperature: 0.3,
           }),
         });
-        const aj = await ar.json();
-        asciiTable = aj?.choices?.[0]?.message?.content?.trim() || "";
+        
+        if (ar.ok) {
+          const aj = await ar.json();
+          asciiTable = aj?.choices?.[0]?.message?.content?.trim() || "";
+        }
+        
       } else {
-        // charts via e2b (unchanged)
+        // Handle charts via E2B
+        let sandbox = null;
         try {
+          // Generate Python code
           const cr = await fetch(`${OPENAI_API}/chat/completions`, {
             method: "POST",
             headers: {
@@ -291,66 +446,151 @@ ${content}` },
             body: JSON.stringify({
               model: "gpt-4o",
               messages: [
-                { role: "system", content: "Output ONLY executable matplotlib code. No markdown." },
-                { role: "user", content: `Extract ALL data and generate matplotlib code (no plt.show()).\n\n${content}` },
+                { 
+                  role: "system", 
+                  content: "You are a Python matplotlib code generator. Output ONLY executable Python code, no markdown, no explanations, no ```python blocks. Do NOT include plt.show()." 
+                },
+                { 
+                  role: "user", 
+                  content: `Extract ALL data from this description and generate clean matplotlib code to recreate the chart. 
+                  
+Requirements:
+- Import necessary libraries (matplotlib.pyplot as plt, numpy as np if needed)
+- Extract all numerical data accurately
+- Choose appropriate chart type (${taskType})
+- Add title, axis labels, and legend where appropriate
+- Use clear colors and styling
+- DO NOT include plt.show()
+- Save figure using plt.savefig() is optional
+
+Description:
+${content}` 
+                },
               ],
               temperature: 0.2,
             }),
           });
-          const cj = await cr.json();
-          let code = (cj?.choices?.[0]?.message?.content || "")
-            .replace(/```python\n?/g, "")
-            .replace(/```\n?/g, "")
-            .replace(/plt\.show\(\)/g, "")
-            .trim();
+          
+          if (!cr.ok) {
+            console.warn(`Code generation failed: ${cr.status}`);
+          } else {
+            const cj = await cr.json();
+            let code = (cj?.choices?.[0]?.message?.content || "")
+              .replace(/```python\n?/g, "")
+              .replace(/```\n?/g, "")
+              .replace(/plt\.show\(\)/g, "")
+              .trim();
 
-          const sb = await Sandbox.create({ apiKey: process.env.E2B_API_KEY, timeoutMs: 30000 });
-          const run = await sb.runCode(code);
-          if (run?.results) {
-            for (const r of run.results) {
-              if (r.png) {
-                generatedImageBase64 = `data:image/png;base64,${r.png}`;
-                break;
+            if (code) {
+              // Create sandbox and run code
+              sandbox = await Sandbox.create({ 
+                apiKey: process.env.E2B_API_KEY, 
+                timeoutMs: 30000 
+              });
+              
+              console.log("Running matplotlib code...");
+              const run = await sandbox.runCode(code);
+              
+              // Check for PNG output
+              if (run?.results) {
+                for (const r of run.results) {
+                  if (r.png) {
+                    generatedImageBase64 = `data:image/png;base64,${r.png}`;
+                    console.log("✅ Chart generated from results");
+                    break;
+                  }
+                }
+              }
+              
+              // Fallback: explicitly save figure
+              if (!generatedImageBase64) {
+                console.log("No PNG in results, trying explicit save...");
+                const saveCode = `
+import matplotlib.pyplot as plt
+import io
+import base64
+
+buf = io.BytesIO()
+plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+buf.seek(0)
+print(base64.b64encode(buf.read()).decode())
+plt.close()
+`;
+                const save = await sandbox.runCode(saveCode);
+                const b64 = (save?.logs?.stdout || []).join("").trim();
+                if (b64 && b64.length > 100) {
+                  generatedImageBase64 = `data:image/png;base64,${b64}`;
+                  console.log("✅ Chart generated via explicit save");
+                }
+              }
+              
+              // Check for errors
+              if (run?.error) {
+                console.error("Code execution error:", run.error);
               }
             }
           }
-          if (!generatedImageBase64) {
-            const save = await sb.runCode(`
-import matplotlib.pyplot as plt, io, base64
-buf=io.BytesIO(); plt.savefig(buf, format='png', dpi=100, bbox_inches='tight'); buf.seek(0)
-print(base64.b64encode(buf.read()).decode()); plt.close()
-`);
-            const b64 = (save?.logs?.stdout || []).join("").trim();
-            if (b64.length > 100) generatedImageBase64 = `data:image/png;base64,${b64}`;
+        } catch (chartError) {
+          console.error("Chart generation error:", chartError);
+          // Continue anyway, will return feedback without chart
+        } finally {
+          // Always close sandbox
+          if (sandbox) {
+            try {
+              await sandbox.close();
+              console.log("Sandbox closed");
+            } catch (closeErr) {
+              console.error("Failed to close sandbox:", closeErr);
+            }
           }
-          await sb.close();
-        } catch { /* ignore chart errors, return feedback only */ }
+        }
       }
 
       return ok({ feedback, asciiTable, generatedImageBase64, generatedSvg });
     }
 
-    // default
-    return ok({ feedback, asciiTable, generatedImageBase64, generatedSvg });
+    // Default fallback
+    return ok({ 
+      feedback: "No operation matched your request.",
+      asciiTable, 
+      generatedImageBase64, 
+      generatedSvg 
+    });
 
   } catch (err) {
+    console.error("❌ HANDLER ERROR:", err);
     return fail(err);
   }
 };
 
-// helpers
+// Helper functions
 function ok(obj) {
   return {
     statusCode: 200,
-    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+    headers: { 
+      "Content-Type": "application/json", 
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
+    },
     body: JSON.stringify(obj),
   };
 }
+
 function fail(err) {
   console.error("❌ ERROR:", err);
   return {
     statusCode: 500,
-    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-    body: JSON.stringify({ error: true, message: err.message }),
+    headers: { 
+      "Content-Type": "application/json", 
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
+    },
+    body: JSON.stringify({ 
+      error: true, 
+      message: err.message || "Internal server error",
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    }),
   };
 }
