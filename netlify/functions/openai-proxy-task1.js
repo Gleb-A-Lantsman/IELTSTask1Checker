@@ -658,18 +658,28 @@ ${content}` },
     await redis.setex(job_id, 3600, JSON.stringify(job));
 
     // Generate image
-    const imgPrompt = `Create a simple educational diagram showing a map comparison with two panels labeled 'BEFORE' and 'AFTER'.
+    const imgPrompt = `Create a minimalist IELTS exam diagram. Two panels labeled "BEFORE" and "AFTER".
 
-Style: Clean schematic diagram (not photorealistic)
-Layout: Two side-by-side panels showing the same location at different times
-Elements: Use simple shapes and icons for buildings, paths, trees, water features
-Colors: Blue for water, green for vegetation, grey for paths, yellow for buildings
-Labels: Clear text labels for all features
+STRICT RULES - Follow EXACTLY:
+1. Only include elements EXPLICITLY mentioned in description below
+2. Simple shapes only: circles for trees, squares for buildings, straight lines for paths
+3. Solid flat colors: blue water, green land, grey paths, yellow labels
+4. Top-down flat view (NO perspective, NO 3D)
+5. If description says "a pier" show ONE pier (not multiple)
+6. If description says "some huts" show simple squares (not detailed buildings)
 
-Description to visualize:
+FORBIDDEN:
+- Multiple piers unless description says "several piers"
+- Bridges unless explicitly mentioned
+- Gradient colors or shading
+- Decorative elements
+- Extra features not mentioned
+
+Description to follow LITERALLY:
 ${content.substring(0, 900)}
 
-Make it look like an IELTS Task 1 educational diagram with clear, readable labels.`;
+Style: Elementary school textbook diagram with basic shapes and flat colors.
+NOT artistic, NOT decorative, NOT realistic.`;
 
     console.log(`🎨 Generating DALL-E image for job ${job_id}...`);
     const ir = await fetch(`${OPENAI_API}/images/generations`, {
