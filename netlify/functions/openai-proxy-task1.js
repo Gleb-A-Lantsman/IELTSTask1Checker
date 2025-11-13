@@ -144,7 +144,7 @@ ${content}`;
     // 1.1) MAPS PRIMARY: PNG via images.generate (no phase)
     // --------------------------------------------------
     if (requestType === "full-feedback" && taskType === "maps" && !phase) {
-      console.log("🖼️ Attempting PNG generation via DALL-E 3...");
+      console.log("🖼️ Attempting PNG generation via ChatGPT...");
       
       try {
         // First, get feedback text
@@ -210,7 +210,7 @@ ${content.substring(0, 800)}`;
 
         if (!ir.ok) {
           const errorText = await ir.text();
-          console.warn(`⚠️ DALL-E 3 failed (${ir.status}): ${errorText}`);
+          console.warn(`⚠️ ChatGPT failed (${ir.status}): ${errorText}`);
           // Signal fallback needed without throwing
           return ok({ 
             status: "error", 
@@ -233,7 +233,7 @@ ${content.substring(0, 800)}`;
         }
         
         // No image in response
-        console.warn("⚠️ DALL-E 3 response missing image data");
+        console.warn("⚠️ ChatGPT response missing image data");
         return ok({ 
           status: "error",
           error: "No image data in response",
