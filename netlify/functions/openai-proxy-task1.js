@@ -658,28 +658,47 @@ ${content}` },
     await redis.setex(job_id, 3600, JSON.stringify(job));
 
     // Generate image
-    const imgPrompt = `Create a minimalist IELTS exam diagram. Two panels labeled "BEFORE" and "AFTER".
+const imgPrompt = `Create a clear, professional IELTS Task 1 map diagram showing "Before" and "After" side-by-side.
 
-STRICT RULES - Follow EXACTLY:
-1. Only include elements EXPLICITLY mentioned in description below
-2. Simple shapes only: circles for trees, squares for buildings, straight lines for paths
-3. Solid flat colors: blue water, green land, grey paths, yellow labels
-4. Top-down flat view (NO perspective, NO 3D)
-5. If description says "a pier" show ONE pier (not multiple)
-6. If description says "some huts" show simple squares (not detailed buildings)
+STYLE MATCHING RULES:
+- Analyze the description to determine the appropriate visual style
+- If describing natural landscapes (islands, parks, countryside): Use illustrated/pictorial style with simplified 3D elements
+- If describing urban areas (towns, schools, roads): Use clean 2D architectural plan view
+- If describing rural-urban mix: Use semi-illustrated style with clear symbols
+- Match the complexity level to what's described
 
-FORBIDDEN:
-- Multiple piers unless description says "several piers"
-- Bridges unless explicitly mentioned
-- Gradient colors or shading
-- Decorative elements
-- Extra features not mentioned
+CORE REQUIREMENTS:
+1. Two clearly labeled panels: "Before" on left, "After" on right
+2. Consistent scale and orientation between both panels
+3. Clear labels for all major features mentioned in the description
+4. Include compass rose (N/S/E/W) if directional information is provided
+5. Use a legend/key if multiple feature types are shown
 
-Description to follow LITERALLY:
+VISUAL QUALITY:
+- Professional IELTS exam quality (clean, readable, educational)
+- Appropriate level of detail for the content described
+- Clear visual hierarchy (major features prominent, minor features smaller)
+- Consistent color coding (water=blue, vegetation=green, buildings=grey/brown, roads=grey)
+- High contrast and legibility for all text labels
+
+CONTENT ACCURACY (CRITICAL):
+- Include ONLY features explicitly mentioned in the description
+- Maintain correct spatial relationships as described
+- Show accurate quantities (if "three shops" mentioned, show exactly three)
+- Preserve the before/after changes as described
+- Do not add decorative or speculative elements
+
+RENDERING APPROACH:
+- For natural/park settings: Soft illustrated style with pictorial symbols (tree icons, simple buildings)
+- For urban/school settings: Clean architectural plan view with geometric shapes
+- For mixed settings: Balanced approach with both plan view and simple 3D elements
+- Text labels should be clear, sans-serif, appropriately sized
+- Use solid colors or subtle textures, avoid heavy gradients unless showing terrain
+
+Description to visualize:
 ${content.substring(0, 900)}
 
-Style: Elementary school textbook diagram with basic shapes and flat colors.
-NOT artistic, NOT decorative, NOT realistic.`;
+Generate a diagram that matches typical IELTS Task 1 map aesthetics - clear, educational, and professionally formatted for an English language exam context.`;
 
     console.log(`🎨 Generating DALL-E image for job ${job_id}...`);
     const ir = await fetch(`${OPENAI_API}/images/generations`, {
