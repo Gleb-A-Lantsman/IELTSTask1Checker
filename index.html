@@ -901,28 +901,30 @@
                         comparisonContainer.innerHTML = `
                           <div class="comparison-container">
                             <div class="comparison-side">
-                              <h5>🗺️ Original Task Image</h5>
+                            <h5>🗺️ Original Task Image</h5>
                               <img src="${currentImageUrl}" alt="Original map">
-                            </div>
-                            <div class="comparison-side">
-                              <h5>🗺️ ASCII Emoji Maps from Your Description</h5>
-                              <pre style="
-                                background:#1e1e1e;
-                                color: #ffffff;
-                                padding: 20px;
-                                border-radius: 8px;
-                                font-family: 'Courier New', monospace;
-                                font-size: 18px;
-                                line-height: 1.4;
-                                overflow-x: auto;
-                                white-space: pre;
-                              ">${asciiPollData.asciiMaps}</pre>
-                              <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
-                                Generated using ASCII emojis (fallback). AI can make mistakes, check carefully.
-                              </p>
-                            </div>
-                          </div>
-                        `;
+                                  </div>
+                                  <div class="comparison-side">
+                                    <h5>🗺️ ASCII Emoji Maps from Your Description</h5>
+                                      <pre style="
+                                        background: #1e1e1e;
+                                        color: #ffffff;
+                                        padding: 20px;
+                                          border-radius: 8px;
+                                        font-family: 'Courier New', 'Consolas', monospace;
+                                        font-size: 20px;
+                                        line-height: 1.2;
+                                        letter-spacing: 0;
+                                          overflow-x: auto;
+                                          white-space: pre;
+                                          display: inline-block;
+                                          ">${asciiPollData.asciiMaps}</pre>
+                                            <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
+                                              Generated using ASCII emojis (fallback). AI can make mistakes, check carefully.
+                                              </p>
+                                            </div>
+                                              </div>
+                                              `;
 
                         hideProgressBar();
                         isLoading = false;
