@@ -1,5 +1,5 @@
 // openai-proxy-task1.js
-// Async processing for DALL-E PNG with Upstash Redis for job storage
+// PNG first (120s timeout), ASCII fallback, Upstash for both
 
 const { Sandbox } = require("@e2b/code-interpreter");
 const { Redis } = require("@upstash/redis");
@@ -10,24 +10,57 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
-// Use undici's Blob/FormData for batch upload
-let UndiciBlob, UndiciFormData;
-try {
-  const undici = require("undici");
-  UndiciBlob = undici.Blob;
-  UndiciFormData = undici.FormData;
-} catch {
-  console.warn("⚠️ undici not found; using global Blob/FormData if present");
-}
-const useBlob = UndiciBlob || globalThis.Blob;
-const useFormData = UndiciFormData || globalThis.FormData;
-
 // Job status types
 const JobStatus = {
   PENDING: 'pending',
   PROCESSING: 'processing',
   COMPLETED: 'completed',
   FAILED: 'failed'
+};
+
+// Emoji dictionary for map features
+const MAP_EMOJIS = {
+  // Natural
+  "river": "🌊", "lake": "💧", "pond": "💦",
+  "woodland": "🌲", "forest": "🌲", "park": "🌳",
+  "garden": "🌸", "farmland": "🌾", "beach": "🏖️",
+  "tree": "🌳", "trees": "🌳",
+  
+  // Water
+  "sea": "🌊", "ocean": "🌊", "water": "💧",
+  
+  // Buildings
+  "housing": "🏠", "house": "🏠", "apartments": "🏢",
+  "hotel": "🏨", "restaurant": "🍽️", "cafe": "☕",
+  "shop": "🏬", "shops": "🏬", "supermarket": "🛒",
+  "market": "🛍️", "office": "🏢", "factory": "🏭",
+  "warehouse": "🏚️", "post_office": "📮", "bank": "🏦",
+  "community_centre": "🏛️",
+  
+  // Institutional
+  "school": "🏫", "university": "🎓", "hospital": "🏥",
+  "museum": "🖼️", "library": "📚", "theatre": "🎭",
+  "cinema": "🎞️",
+  
+  // Transport
+  "road": "⬛", "path": "⬛", "bridge": "🌉",
+  "railway": "🚆", "pier": "🛳️", "airport": "✈️",
+  "car_park": "🅿️",
+  
+  // Recreation
+  "stadium": "⚽", "tennis": "🎾", "tennis_court": "🎾",
+  "golf": "⛳", "golf_course": "⛳", "play_area": "🛝",
+  "fountain": "💦", "amphitheatre": "🎶",
+  
+  // Tourism
+  "accommodation": "🛖", "reception": "🪪",
+  "hut": "🛖", "huts": "🛖",
+  
+  // Compass
+  "north": "⬆️", "south": "⬇️", "east": "➡️", "west": "⬅️",
+  
+  // Default
+  "default": "⬜"
 };
 
 exports.handler = async (event) => {
@@ -39,7 +72,7 @@ exports.handler = async (event) => {
       taskType,
       imageUrl,
       imageName,
-      phase,      // "submit" | "poll"
+      phase,
       job_id
     } = body;
 
@@ -47,7 +80,7 @@ exports.handler = async (event) => {
     const fetch = globalThis.fetch;
 
     // ---------------------------
-    // 0) POLL ANY JOB (PNG or SVG)
+    // 0) POLL ANY JOB (PNG or ASCII)
     // ---------------------------
     if (phase === "poll" && job_id) {
       console.log(`🔍 Polling job: ${job_id}`);
@@ -64,107 +97,11 @@ exports.handler = async (event) => {
 
       const job = typeof jobData === 'string' ? JSON.parse(jobData) : jobData;
 
-      // If job is still processing, check its type
+      // Return current status for any job type
       if (job.status === JobStatus.PROCESSING || job.status === JobStatus.PENDING) {
-        // For SVG batch jobs, check OpenAI batch status
-        if (job.type === 'svg_batch' && job.batchId) {
-          try {
-            const jobRes = await fetch(`${OPENAI_API}/batches/${job.batchId}`, {
-              headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
-            });
-            
-            if (!jobRes.ok) {
-              job.status = JobStatus.FAILED;
-              job.error = `Failed to fetch batch status: ${jobRes.status}`;
-              await redis.setex(job_id, 3600, JSON.stringify(job));
-              return ok({ status: "error", error: job.error });
-            }
-            
-            const batchData = await jobRes.json();
-
-            if (["failed", "expired", "cancelled"].includes(batchData.status)) {
-              job.status = JobStatus.FAILED;
-              job.error = `Batch job ${batchData.status}`;
-              await redis.setex(job_id, 3600, JSON.stringify(job));
-              return ok({ status: "error", error: job.error });
-            }
-            
-            if (batchData.status !== "completed") {
-              return ok({ status: batchData.status });
-            }
-
-            // Batch completed - extract SVG
-            const fileId = batchData.output_file_id;
-            if (!fileId) {
-              job.status = JobStatus.FAILED;
-              job.error = "No output file ID from batch";
-              await redis.setex(job_id, 3600, JSON.stringify(job));
-              return ok({ status: "error", error: job.error });
-            }
-            
-            const fileRes = await fetch(`${OPENAI_API}/files/${fileId}/content`, {
-              headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
-            });
-            
-            if (!fileRes.ok) {
-              job.status = JobStatus.FAILED;
-              job.error = "Failed to fetch output file";
-              await redis.setex(job_id, 3600, JSON.stringify(job));
-              return ok({ status: "error", error: job.error });
-            }
-            
-            const fileText = await fileRes.text();
-            let svg = null;
-
-            for (const line of fileText.trim().split("\n")) {
-              if (!line.trim()) continue;
-              try {
-                const obj = JSON.parse(line);
-                const content = obj?.response?.body?.choices?.[0]?.message?.content || "";
-                const cleaned = content.replace(/```svg\n?/g, "").replace(/```\n?/g, "").trim();
-                const m = cleaned.match(/<svg[\s\S]*?<\/svg>/i);
-                if (m) { 
-                  svg = m[0]; 
-                  break; 
-                }
-              } catch (parseErr) {
-                console.warn("Failed to parse JSONL line:", parseErr);
-              }
-            }
-
-            if (!svg) {
-              job.status = JobStatus.FAILED;
-              job.error = "No SVG found in batch output";
-              await redis.setex(job_id, 3600, JSON.stringify(job));
-              return ok({ status: "error", error: job.error });
-            }
-            
-            // Update job with result
-            job.status = JobStatus.COMPLETED;
-            job.result = { generatedSvg: svg };
-            await redis.setex(job_id, 3600, JSON.stringify(job));
-            
-            console.log(`✅ SVG job ${job_id} completed`);
-            return ok({ 
-              status: "completed", 
-              generatedSvg: svg,
-              feedback: job.feedback
-            });
-
-          } catch (err) {
-            console.error("SVG batch poll error:", err);
-            job.status = JobStatus.FAILED;
-            job.error = err.message;
-            await redis.setex(job_id, 3600, JSON.stringify(job));
-            return ok({ status: "error", error: err.message });
-          }
-        }
-        
-        // For PNG jobs, just return current status
         return ok({ status: job.status });
       }
 
-      // Job completed or failed
       if (job.status === JobStatus.COMPLETED) {
         return ok({ 
           status: "completed", 
@@ -215,7 +152,7 @@ exports.handler = async (event) => {
     }
 
     // --------------------------------------------------
-    // 2) MAPS - SUBMIT PNG JOB (async DALL-E)
+    // 2) MAPS - SUBMIT PNG JOB (async, 2x timeout)
     // --------------------------------------------------
     if (requestType === "full-feedback" && taskType === "maps" && phase === "submit") {
       console.log("🖼️ Submitting async PNG generation job...");
@@ -234,8 +171,8 @@ exports.handler = async (event) => {
         error: null
       };
       
-      // Store in Redis with 1 hour expiration
-      await redis.setex(job_id, 3600, JSON.stringify(job));
+      // Store in Redis with 2 hour expiration (increased from 1 hour)
+      await redis.setex(job_id, 7200, JSON.stringify(job));
       console.log(`✅ Job stored in Redis: ${job_id}`);
 
       // Start async processing (don't await)
@@ -251,170 +188,38 @@ exports.handler = async (event) => {
     }
 
     // --------------------------------------------------
-    // 3) MAPS FALLBACK - SUBMIT SVG BATCH
+    // 3) MAPS FALLBACK - SUBMIT ASCII JOB
     // --------------------------------------------------
-    if (requestType === "full-feedback" && taskType === "maps" && phase === "submit-svg") {
-      console.log("📦 Submitting SVG batch job (fallback)...");
+    if (requestType === "full-feedback" && taskType === "maps" && phase === "submit-ascii") {
+      console.log("🗺️ Submitting ASCII emoji map job (fallback)...");
       
-      const batchRequest = {
-        custom_id: `map-${Date.now()}`,
-        method: "POST",
-        url: "/v1/chat/completions",
-        body: {
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content: "You are an SVG diagram generator. Output ONLY valid SVG markup, no markdown, no backticks, no commentary."
-            },
-            {
-              role: "user",
-              content: `Convert this IELTS Task 1 map description into a clean, accurate SVG diagram.
-
-Rules:
-- Output ONLY <svg>...</svg> with a proper viewBox (e.g., viewBox="0 0 800 600")
-- Create two side-by-side panels for BEFORE and AFTER
-- Use clear labels and simple geometric shapes
-- Use blue for sea/water, green for land/vegetation, grey for roads/paths, yellow for buildings
-- Include a legend if helpful
-- No raster images, only vector shapes (rect, circle, path, text, etc.)
-- Make text readable (font-size at least 14)
-
-DESCRIPTION:
-${content}`
-            }
-          ],
-          max_tokens: 4000,
-          temperature: 0.3
-        }
+      const job_id = `ascii-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Create job entry
+      const job = {
+        id: job_id,
+        type: 'ascii_map',
+        status: JobStatus.PENDING,
+        createdAt: Date.now(),
+        content: content,
+        feedback: null,
+        result: null,
+        error: null
       };
+      
+      await redis.setex(job_id, 3600, JSON.stringify(job));
+      console.log(`✅ ASCII job stored in Redis: ${job_id}`);
 
-      try {
-        // Create multipart/form-data with JSONL line
-        const jsonlLine = JSON.stringify(batchRequest) + "\n";
-        const form = new useFormData();
-        form.append("purpose", "batch");
-        form.append("file", new useBlob([jsonlLine], { type: "application/jsonl" }), "batch_input.jsonl");
+      // Start async processing
+      processAsciiMapJob(job_id, content, OPENAI_API, redis).catch(err => {
+        console.error("ASCII map job processing error:", err);
+      });
 
-        const upload = await fetch(`${OPENAI_API}/files`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-          body: form
-        });
-
-        const bodyText = await upload.text();
-        
-        if (!upload.ok) {
-          throw new Error(`File upload failed: ${upload.status} ${bodyText}`);
-        }
-
-        let uploadData;
-        try {
-          uploadData = JSON.parse(bodyText);
-        } catch {
-          throw new Error("Invalid JSON response from file upload");
-        }
-
-        const fileId = uploadData?.id;
-        if (!fileId) {
-          throw new Error("Upload response missing file id");
-        }
-
-        console.log(`✅ File uploaded: ${fileId}`);
-
-        // Create batch job
-        const br = await fetch(`${OPENAI_API}/batches`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            input_file_id: fileId,
-            endpoint: "/v1/chat/completions",
-            completion_window: "24h",
-            metadata: { source: "IELTS-map", type: "SVG-fallback" }
-          })
-        });
-        
-        if (!br.ok) {
-          const errorText = await br.text();
-          throw new Error(`Batch creation failed: ${br.status} ${errorText}`);
-        }
-        
-        const bj = await br.json();
-        
-        if (bj.error) {
-          throw new Error(bj.error.message || "Batch creation error");
-        }
-        
-        if (!bj.id) {
-          throw new Error("Batch response missing job ID");
-        }
-
-        const job_id = `svg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        
-        // Get feedback
-        let feedback = "";
-        try {
-          const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "gpt-4o-mini",
-              messages: [
-                { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
-                { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this map description based on:
-1. Task Achievement
-2. Coherence and Cohesion
-3. Lexical Resource
-4. Grammatical Range and Accuracy
-
-Make section titles bold with **Title**. Be specific and constructive.
-
-ANSWER:
-${content}` },
-              ],
-              temperature: 0.7,
-            }),
-          });
-          
-          if (feedbackRes.ok) {
-            const feedbackJson = await feedbackRes.json();
-            feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "";
-          }
-        } catch (err) {
-          console.error("Feedback generation error:", err);
-        }
-
-        // Store job in Redis
-        const job = {
-          id: job_id,
-          type: 'svg_batch',
-          status: JobStatus.PROCESSING,
-          createdAt: Date.now(),
-          batchId: bj.id,
-          feedback: feedback,
-          result: null,
-          error: null
-        };
-        
-        await redis.setex(job_id, 3600, JSON.stringify(job));
-
-        console.log(`✅ Batch job created: ${bj.id}`);
-        return ok({ 
-          job_id, 
-          status: "submitted",
-          message: "SVG batch job created"
-        });
-        
-      } catch (batchError) {
-        console.error("❌ Batch submission error:", batchError);
-        throw batchError;
-      }
+      return ok({ 
+        job_id, 
+        status: "submitted",
+        message: "ASCII emoji map generation started"
+      });
     }
 
     // --------------------------------------
@@ -613,7 +418,7 @@ async function processPngJob(job_id, content, OPENAI_API, redis) {
 
   const job = typeof jobData === 'string' ? JSON.parse(jobData) : jobData;
   job.status = JobStatus.PROCESSING;
-  await redis.setex(job_id, 3600, JSON.stringify(job));
+  await redis.setex(job_id, 7200, JSON.stringify(job));
   
   try {
     const fetch = globalThis.fetch;
@@ -655,50 +460,45 @@ ${content}` },
     }
 
     job.feedback = feedback;
-    await redis.setex(job_id, 3600, JSON.stringify(job));
+    await redis.setex(job_id, 7200, JSON.stringify(job));
 
-    // Generate image
-const imgPrompt = `Create a clear, professional IELTS Task 1 map diagram showing "Before" and "After" side-by-side.
+    // Detect content type for adaptive styling
+    const hasNatural = /island|beach|forest|tree|park|lake|countryside/i.test(content);
+    const hasUrban = /road|street|building|shop|school|housing|apartment/i.test(content);
 
-STYLE MATCHING RULES:
-- Analyze the description to determine the appropriate visual style
-- If describing natural landscapes (islands, parks, countryside): Use illustrated/pictorial style with simplified 3D elements
-- If describing urban areas (towns, schools, roads): Use clean 2D architectural plan view
-- If describing rural-urban mix: Use semi-illustrated style with clear symbols
-- Match the complexity level to what's described
+    let styleGuide = "";
+    if (hasNatural && !hasUrban) {
+      styleGuide = "Use illustrated pictorial style with soft 3D elements, like a storybook map. Warm, artistic rendering.";
+    } else if (hasUrban && !hasNatural) {
+      styleGuide = "Use clean architectural plan view, geometric 2D top-down perspective. Professional urban planning style.";
+    } else {
+      styleGuide = "Use balanced semi-illustrated style mixing plan view and pictorial elements.";
+    }
 
-CORE REQUIREMENTS:
-1. Two clearly labeled panels: "Before" on left, "After" on right
-2. Consistent scale and orientation between both panels
-3. Clear labels for all major features mentioned in the description
-4. Include compass rose (N/S/E/W) if directional information is provided
-5. Use a legend/key if multiple feature types are shown
+    // Generate image with adaptive prompt
+    const imgPrompt = `Create a professional IELTS Task 1 map showing "Before" and "After" side-by-side.
 
-VISUAL QUALITY:
-- Professional IELTS exam quality (clean, readable, educational)
-- Appropriate level of detail for the content described
-- Clear visual hierarchy (major features prominent, minor features smaller)
-- Consistent color coding (water=blue, vegetation=green, buildings=grey/brown, roads=grey)
-- High contrast and legibility for all text labels
+${styleGuide}
 
-CONTENT ACCURACY (CRITICAL):
-- Include ONLY features explicitly mentioned in the description
-- Maintain correct spatial relationships as described
-- Show accurate quantities (if "three shops" mentioned, show exactly three)
-- Preserve the before/after changes as described
-- Do not add decorative or speculative elements
+REQUIREMENTS:
+- Two clearly labeled panels with consistent scale
+- Compass rose (N/S/E/W) if directional info mentioned
+- Legend/key if multiple feature types exist
+- Clear labels for all features
+- Professional exam-quality formatting
 
-RENDERING APPROACH:
-- For natural/park settings: Soft illustrated style with pictorial symbols (tree icons, simple buildings)
-- For urban/school settings: Clean architectural plan view with geometric shapes
-- For mixed settings: Balanced approach with both plan view and simple 3D elements
-- Text labels should be clear, sans-serif, appropriately sized
-- Use solid colors or subtle textures, avoid heavy gradients unless showing terrain
+COLORS:
+- Water: blue shades | Vegetation: green shades | Buildings: grey/tan | Roads: grey with dashes
 
-Description to visualize:
+ACCURACY (CRITICAL):
+- Include ONLY features explicitly mentioned below
+- Correct spatial relationships and quantities
+- No invented or decorative additions
+
+Description:
 ${content.substring(0, 900)}
 
-Generate a diagram that matches typical IELTS Task 1 map aesthetics - clear, educational, and professionally formatted for an English language exam context.`;
+Style: Official IELTS examination material - clear, educational, professional.`;
 
     console.log(`🎨 Generating DALL-E image for job ${job_id}...`);
     const ir = await fetch(`${OPENAI_API}/images/generations`, {
@@ -746,12 +546,186 @@ Generate a diagram that matches typical IELTS Task 1 map aesthetics - clear, edu
       generatedImageBase64: `data:image/png;base64,${base64}`,
       usedPipeline: "dall-e-3"
     };
-    await redis.setex(job_id, 3600, JSON.stringify(job));
+    await redis.setex(job_id, 7200, JSON.stringify(job));
 
     console.log(`✅ PNG job ${job_id} completed successfully`);
 
   } catch (error) {
     console.error(`❌ PNG job ${job_id} failed:`, error);
+    job.status = JobStatus.FAILED;
+    job.error = error.message;
+    await redis.setex(job_id, 7200, JSON.stringify(job));
+  }
+}
+
+// Async ASCII emoji map processing function
+async function processAsciiMapJob(job_id, content, OPENAI_API, redis) {
+  const jobData = await redis.get(job_id);
+  if (!jobData) {
+    console.error(`Job ${job_id} not found in Redis`);
+    return;
+  }
+
+  const job = typeof jobData === 'string' ? JSON.parse(jobData) : jobData;
+  job.status = JobStatus.PROCESSING;
+  await redis.setex(job_id, 3600, JSON.stringify(job));
+  
+  try {
+    const fetch = globalThis.fetch;
+
+    // Get feedback (reuse from PNG if available, otherwise generate)
+    let feedback = job.feedback || "";
+    
+    if (!feedback) {
+      try {
+        const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
+              { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this map description based on:
+1. Task Achievement
+2. Coherence and Cohesion
+3. Lexical Resource
+4. Grammatical Range and Accuracy
+
+Make section titles bold with **Title**. Be specific and constructive.
+
+ANSWER:
+${content}` },
+            ],
+            temperature: 0.7,
+          }),
+        });
+        
+        if (feedbackRes.ok) {
+          const feedbackJson = await feedbackRes.json();
+          feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "";
+        }
+      } catch (err) {
+        console.error("Feedback generation error:", err);
+      }
+    }
+
+    job.feedback = feedback;
+    await redis.setex(job_id, 3600, JSON.stringify(job));
+
+    // Generate ASCII emoji maps
+    const asciiPrompt = `You are an ASCII emoji map generator for IELTS Task 1 practice.
+
+Create TWO side-by-side ASCII emoji maps (BEFORE and AFTER) based on this description.
+
+STRICT RULES:
+1. Use ONLY these emojis (choose based on what's mentioned):
+   - Sea/Water: 🌊
+   - Trees/Forest: 🌳 or 🌲
+   - Beach/Sand: 🏖️
+   - Farmland: 🌾
+   - Park: 🌳
+   - Housing: 🏠
+   - Apartments: 🏢
+   - Hotel: 🏨
+   - Restaurant: 🍽️
+   - Cafe: ☕
+   - Shop: 🏬
+   - Road/Path: ⬛ (black square - like Dune 2 concrete slabs)
+   - Pier: 🛳️
+   - Golf: ⛳
+   - Tennis: 🎾
+   - School: 🏫
+   - Huts: 🛖
+   - Reception: 🪪
+   - Factory: 🏭
+   - Bridge: 🌉
+   - Empty space: ⬜ (white square)
+
+2. Create a grid layout (approximately 20x15 cells each)
+
+3. Label each map clearly at the top: "BEFORE" and "AFTER"
+
+4. Add compass rose (N ⬆️  S ⬇️  E ➡️  W ⬅️) if directions mentioned
+
+5. Add a simple legend at the bottom showing what emojis represent
+
+6. Use spacing and alignment to show spatial relationships clearly
+
+7. ONLY include features EXPLICITLY mentioned in the description
+
+8. Roads should be drawn as connected ⬛ squares forming paths (like Dune 2)
+
+EXAMPLE FORMAT:
+
+         BEFORE                          AFTER
+    
+    ⬜⬜⬜🌊🌊🌊🌊🌊        ⬜⬜⬜🌊🌊🌊🌊🌊
+    ⬜🌳🌳🏖️🏖️🌊🌊        ⬜⬛⬛🏖️🏖️🌊🌊
+    ⬜🌳🌳🌳⬜⬜⬜        🏨⬛🏠🏠⬜⬜⬜
+    ⬜⬜🌳🌳🌳⬜⬜        🏠⬛🏠🏠⬜⬜⬜
+    ⬜⬜⬜🌳⬜⬜⬜        ⬛⬛⬛🛳️🌊🌊🌊
+
+Legend: 🌊 Sea | 🌳 Trees | 🏖️ Beach | ⬛ Road | 🏠 Housing | 🏨 Hotel | 🛳️ Pier
+
+NOW GENERATE ASCII EMOJI MAPS FOR THIS DESCRIPTION:
+
+${content}
+
+Output ONLY the maps with labels and legend. No explanations.`;
+
+    console.log(`🗺️ Generating ASCII emoji maps for job ${job_id}...`);
+    const mapRes = await fetch(`${OPENAI_API}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        messages: [
+          {
+            role: "system",
+            content: "You are an ASCII emoji map generator. Output ONLY the maps with proper emoji alignment and spacing. No markdown, no explanations."
+          },
+          {
+            role: "user",
+            content: asciiPrompt
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 2000
+      })
+    });
+
+    if (!mapRes.ok) {
+      const errorText = await mapRes.text();
+      throw new Error(`ASCII map generation failed: ${mapRes.status} - ${errorText}`);
+    }
+
+    const mapJson = await mapRes.json();
+    const asciiMaps = mapJson?.choices?.[0]?.message?.content?.trim();
+    
+    if (!asciiMaps) {
+      throw new Error("No ASCII maps generated");
+    }
+
+    console.log("✅ ASCII emoji maps generated");
+    
+    // Update job with result
+    job.status = JobStatus.COMPLETED;
+    job.result = {
+      asciiMaps: asciiMaps,
+      usedPipeline: "ascii-emoji"
+    };
+    await redis.setex(job_id, 3600, JSON.stringify(job));
+
+    console.log(`✅ ASCII map job ${job_id} completed successfully`);
+
+  } catch (error) {
+    console.error(`❌ ASCII map job ${job_id} failed:`, error);
     job.status = JobStatus.FAILED;
     job.error = error.message;
     await redis.setex(job_id, 3600, JSON.stringify(job));
