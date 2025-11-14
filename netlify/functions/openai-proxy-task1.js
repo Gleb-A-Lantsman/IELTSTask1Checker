@@ -686,65 +686,65 @@ async function processAsciiMapJob(job_id, content, taskType, OPENAI_API, redis) 
     await redis.setex(job_id, 3600, JSON.stringify(job));
 
     // Generate ASCII emoji maps
-    const asciiPrompt = `You are an ASCII emoji map generator for IELTS Task 1 practice.
+const asciiPrompt = `You are an ASCII emoji map generator for IELTS Task 1 practice.
 
 Create TWO side-by-side ASCII emoji maps (BEFORE and AFTER) based on this description.
 
 STRICT RULES:
-1. Use ONLY these emojis (choose based on what's mentioned):
+1. Grid size: Each map should be approximately 30 columns × 12 rows
+   
+2. Use ONLY these emojis (choose the MINIMUM needed):
    - Sea/Water: 🌊
-   - Trees/Forest: 🌳 or 🌲
+   - Trees/Forest/Park: 🌳
    - Beach/Sand: 🏖️
-   - Farmland: 🌾
-   - Park: 🌳
-   - Housing: 🏠
-   - Apartments: 🏢
-   - Hotel: 🏨
-   - Restaurant: 🍽️
-   - Cafe: ☕
-   - Shop: 🏬
-   - Road/Path: ⬛ (black square - like Dune 2 concrete slabs)
-   - Pier: 🛳️
-   - Golf: ⛳
-   - Tennis: 🎾
-   - School: 🏫
-   - Huts: 🛖
-   - Reception: 🪪
-   - Factory: 🏭
-   - Bridge: 🌉
-   - Empty space: ⬜ (white square)
+   - Farmland/Grass: 🌾
+   - Roads/Paths: ⬛
+   - Buildings (ANY type): 🏠
+   - Empty space: ⬜
+   
+   IMPORTANT: Use as FEW different emojis as possible.
+   
+3. Layout: Place maps SIDE BY SIDE horizontally (not vertically)
+   
+   Format:
+   BEFORE (left)              AFTER (right)
+   🌊🌊🌊🌊🌊🌊...            🌊🌊🌊🌊🌊🌊...
+   ⬜🌳🌳⬜⬜⬜...            ⬜🏠🏠⬜⬜⬜...
+   
+4. Perfect alignment:
+   - Each emoji must align vertically in columns
+   - Use monospace formatting
+   - Test alignment before finalizing
+   
+5. Clear labels:
+   - Title each map at the top: "BEFORE" and "AFTER"
+   - Add simple legend at bottom
+   
+6. Compass rose: Add (N ⬆️  S ⬇️  E ➡️  W ⬅️) ONLY if mentioned in description
 
-2. Create a grid layout (approximately 20x15 cells each)
+7. Content accuracy:
+   - ONLY include features EXPLICITLY mentioned
+   - Represent quantities accurately (if "3 buildings" → exactly 3 🏠 emojis)
 
-3. Label each map clearly at the top: "BEFORE" and "AFTER"
+EXAMPLE OUTPUT:
 
-4. Add compass rose (N ⬆️  S ⬇️  E ➡️  W ⬅️) if directions mentioned
+     BEFORE                              AFTER
+🌊🌊🌊🌊🌊🌊🌊🌊🌊🌊        🌊🌊🌊🌊🌊🌊🌊🌊🌊🌊
+🌊⬜⬜🌳🌳🌳🌊🌊🌊🌊        🌊⬜⬛⬛🌳🌳🌊🌊🌊🌊
+⬜⬜🌳🌳🌳🌳⬜⬜⬜🌊        ⬜🏠⬛🏠🌳🌳⬜⬜⬜🌊
+⬜🌳🌳🌳🌳🌳🌳⬜⬜⬜        ⬜🏠⬛🏠🏠🌳🌳⬜⬜⬜
+⬜⬜🌳🌳🌳⬜⬜⬜⬜⬜        ⬜⬜⬛⬛🏠⬜⬜⬜⬜⬜
+🌊⬜⬜🌳⬜⬜⬜⬜⬜🌊        🌊⬜⬜⬛⬛⬜⬜⬜⬜🌊
+🌊🌊⬜⬜⬜⬜⬜🌊🌊🌊        🌊🌊⬜⬜⬛🏠⬜🌊🌊🌊
+🌊🌊🌊⬜⬜⬜🌊🌊🌊🌊        🌊🌊🌊⬜⬜⬜🌊🌊🌊🌊
 
-5. Add a simple legend at the bottom showing what emojis represent
-
-6. Use spacing and alignment to show spatial relationships clearly
-
-7. ONLY include features EXPLICITLY mentioned in the description
-
-8. Roads should be drawn as connected ⬛ squares forming paths (like Dune 2)
-
-EXAMPLE FORMAT:
-
-         BEFORE                          AFTER
-    
-    ⬜⬜⬜🌊🌊🌊🌊🌊        ⬜⬜⬜🌊🌊🌊🌊🌊
-    ⬜🌳🌳🏖️🏖️🌊🌊        ⬜⬛⬛🏖️🏖️🌊🌊
-    ⬜🌳🌳🌳⬜⬜⬜        🏨⬛🏠🏠⬜⬜⬜
-    ⬜⬜🌳🌳🌳⬜⬜        🏠⬛🏠🏠⬜⬜⬜
-    ⬜⬜⬜🌳⬜⬜⬜        ⬛⬛⬛🛳️🌊🌊🌊
-
-Legend: 🌊 Sea | 🌳 Trees | 🏖️ Beach | ⬛ Road | 🏠 Housing | 🏨 Hotel | 🛳️ Pier
+Legend: 🌊 Sea | 🌳 Vegetation | 🏠 Buildings | ⬛ Roads | ⬜ Empty
 
 NOW GENERATE ASCII EMOJI MAPS FOR THIS DESCRIPTION:
 
 ${content}
 
-Output ONLY the maps with labels and legend. No explanations.`;
+Output ONLY the maps in monospace format. No markdown code blocks, no explanations.`;
 
     console.log(`🗺️ Generating ASCII emoji maps for job ${job_id}...`);
     const mapRes = await fetch(`${OPENAI_API}/chat/completions`, {
