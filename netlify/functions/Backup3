@@ -1,0 +1,772 @@
+// openai-proxy-task1.js
+// Async processing for DALL-E PNG with Upstash Redis for job storage
+
+const { Sandbox } = require("@e2b/code-interpreter");
+const { Redis } = require("@upstash/redis");
+
+// Initialize Upstash Redis
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
+
+// Use undici's Blob/FormData for batch upload
+let UndiciBlob, UndiciFormData;
+try {
+  const undici = require("undici");
+  UndiciBlob = undici.Blob;
+  UndiciFormData = undici.FormData;
+} catch {
+  console.warn("⚠️ undici not found; using global Blob/FormData if present");
+}
+const useBlob = UndiciBlob || globalThis.Blob;
+const useFormData = UndiciFormData || globalThis.FormData;
+
+// Job status types
+const JobStatus = {
+  PENDING: 'pending',
+  PROCESSING: 'processing',
+  COMPLETED: 'completed',
+  FAILED: 'failed'
+};
+
+exports.handler = async (event) => {
+  try {
+    const body = JSON.parse(event.body || "{}");
+    const {
+      content,
+      requestType,
+      taskType,
+      imageUrl,
+      imageName,
+      phase,      // "submit" | "poll"
+      job_id
+    } = body;
+
+    const OPENAI_API = "https://api.openai.com/v1";
+    const fetch = globalThis.fetch;
+
+    // ---------------------------
+    // 0) POLL ANY JOB (PNG or SVG)
+    // ---------------------------
+    if (phase === "poll" && job_id) {
+      console.log(`🔍 Polling job: ${job_id}`);
+      
+      const jobData = await redis.get(job_id);
+      
+      if (!jobData) {
+        return ok({ 
+          status: "error", 
+          error: "Job not found",
+          message: "Job may have expired or invalid job_id"
+        });
+      }
+
+      const job = typeof jobData === 'string' ? JSON.parse(jobData) : jobData;
+
+      // If job is still processing, check its type
+      if (job.status === JobStatus.PROCESSING || job.status === JobStatus.PENDING) {
+        // For SVG batch jobs, check OpenAI batch status
+        if (job.type === 'svg_batch' && job.batchId) {
+          try {
+            const jobRes = await fetch(`${OPENAI_API}/batches/${job.batchId}`, {
+              headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+            });
+            
+            if (!jobRes.ok) {
+              job.status = JobStatus.FAILED;
+              job.error = `Failed to fetch batch status: ${jobRes.status}`;
+              await redis.setex(job_id, 3600, JSON.stringify(job));
+              return ok({ status: "error", error: job.error });
+            }
+            
+            const batchData = await jobRes.json();
+
+            if (["failed", "expired", "cancelled"].includes(batchData.status)) {
+              job.status = JobStatus.FAILED;
+              job.error = `Batch job ${batchData.status}`;
+              await redis.setex(job_id, 3600, JSON.stringify(job));
+              return ok({ status: "error", error: job.error });
+            }
+            
+            if (batchData.status !== "completed") {
+              return ok({ status: batchData.status });
+            }
+
+            // Batch completed - extract SVG
+            const fileId = batchData.output_file_id;
+            if (!fileId) {
+              job.status = JobStatus.FAILED;
+              job.error = "No output file ID from batch";
+              await redis.setex(job_id, 3600, JSON.stringify(job));
+              return ok({ status: "error", error: job.error });
+            }
+            
+            const fileRes = await fetch(`${OPENAI_API}/files/${fileId}/content`, {
+              headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+            });
+            
+            if (!fileRes.ok) {
+              job.status = JobStatus.FAILED;
+              job.error = "Failed to fetch output file";
+              await redis.setex(job_id, 3600, JSON.stringify(job));
+              return ok({ status: "error", error: job.error });
+            }
+            
+            const fileText = await fileRes.text();
+            let svg = null;
+
+            for (const line of fileText.trim().split("\n")) {
+              if (!line.trim()) continue;
+              try {
+                const obj = JSON.parse(line);
+                const content = obj?.response?.body?.choices?.[0]?.message?.content || "";
+                const cleaned = content.replace(/```svg\n?/g, "").replace(/```\n?/g, "").trim();
+                const m = cleaned.match(/<svg[\s\S]*?<\/svg>/i);
+                if (m) { 
+                  svg = m[0]; 
+                  break; 
+                }
+              } catch (parseErr) {
+                console.warn("Failed to parse JSONL line:", parseErr);
+              }
+            }
+
+            if (!svg) {
+              job.status = JobStatus.FAILED;
+              job.error = "No SVG found in batch output";
+              await redis.setex(job_id, 3600, JSON.stringify(job));
+              return ok({ status: "error", error: job.error });
+            }
+            
+            // Update job with result
+            job.status = JobStatus.COMPLETED;
+            job.result = { generatedSvg: svg };
+            await redis.setex(job_id, 3600, JSON.stringify(job));
+            
+            console.log(`✅ SVG job ${job_id} completed`);
+            return ok({ 
+              status: "completed", 
+              generatedSvg: svg,
+              feedback: job.feedback
+            });
+
+          } catch (err) {
+            console.error("SVG batch poll error:", err);
+            job.status = JobStatus.FAILED;
+            job.error = err.message;
+            await redis.setex(job_id, 3600, JSON.stringify(job));
+            return ok({ status: "error", error: err.message });
+          }
+        }
+        
+        // For PNG jobs, just return current status
+        return ok({ status: job.status });
+      }
+
+      // Job completed or failed
+      if (job.status === JobStatus.COMPLETED) {
+        return ok({ 
+          status: "completed", 
+          ...job.result,
+          feedback: job.feedback
+        });
+      }
+
+      if (job.status === JobStatus.FAILED) {
+        return ok({ 
+          status: "error", 
+          error: job.error || "Job failed"
+        });
+      }
+
+      return ok({ status: job.status });
+    }
+
+    // -----------------------------------
+    // 1) FEEDBACK ONLY (quick help)
+    // -----------------------------------
+    if (requestType === "help") {
+      const feedbackPrompt = `You are an IELTS examiner. Give SHORT helpful hints (under 150 words) for improving this IELTS Task 1 answer:\n\n${content}`;
+
+      const fr = await fetch(`${OPENAI_API}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
+            { role: "user", content: feedbackPrompt },
+          ],
+          temperature: 0.7,
+        }),
+      });
+      
+      if (!fr.ok) {
+        throw new Error(`OpenAI API failed: ${fr.status}`);
+      }
+      
+      const fjson = await fr.json();
+      const feedback = fjson?.choices?.[0]?.message?.content?.trim() || "Unable to generate feedback.";
+      return ok({ feedback });
+    }
+
+    // --------------------------------------------------
+    // 2) MAPS - SUBMIT PNG JOB (async DALL-E)
+    // --------------------------------------------------
+    if (requestType === "full-feedback" && taskType === "maps" && phase === "submit") {
+      console.log("🖼️ Submitting async PNG generation job...");
+      
+      const job_id = `png-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      // Create job entry
+      const job = {
+        id: job_id,
+        type: 'png_dalle',
+        status: JobStatus.PENDING,
+        createdAt: Date.now(),
+        content: content,
+        feedback: null,
+        result: null,
+        error: null
+      };
+      
+      // Store in Redis with 1 hour expiration
+      await redis.setex(job_id, 3600, JSON.stringify(job));
+      console.log(`✅ Job stored in Redis: ${job_id}`);
+
+      // Start async processing (don't await)
+      processPngJob(job_id, content, OPENAI_API, redis).catch(err => {
+        console.error("PNG job processing error:", err);
+      });
+
+      return ok({ 
+        job_id, 
+        status: "submitted",
+        message: "PNG generation started"
+      });
+    }
+
+    // --------------------------------------------------
+    // 3) MAPS FALLBACK - SUBMIT SVG BATCH
+    // --------------------------------------------------
+    if (requestType === "full-feedback" && taskType === "maps" && phase === "submit-svg") {
+      console.log("📦 Submitting SVG batch job (fallback)...");
+      
+      const batchRequest = {
+        custom_id: `map-${Date.now()}`,
+        method: "POST",
+        url: "/v1/chat/completions",
+        body: {
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "system",
+              content: "You are an SVG diagram generator. Output ONLY valid SVG markup, no markdown, no backticks, no commentary."
+            },
+            {
+              role: "user",
+              content: `Convert this IELTS Task 1 map description into a clean, accurate SVG diagram.
+
+Rules:
+- Output ONLY <svg>...</svg> with a proper viewBox (e.g., viewBox="0 0 800 600")
+- Create two side-by-side panels for BEFORE and AFTER
+- Use clear labels and simple geometric shapes
+- Use blue for sea/water, green for land/vegetation, grey for roads/paths, yellow for buildings
+- Include a legend if helpful
+- No raster images, only vector shapes (rect, circle, path, text, etc.)
+- Make text readable (font-size at least 14)
+
+DESCRIPTION:
+${content}`
+            }
+          ],
+          max_tokens: 4000,
+          temperature: 0.3
+        }
+      };
+
+      try {
+        // Create multipart/form-data with JSONL line
+        const jsonlLine = JSON.stringify(batchRequest) + "\n";
+        const form = new useFormData();
+        form.append("purpose", "batch");
+        form.append("file", new useBlob([jsonlLine], { type: "application/jsonl" }), "batch_input.jsonl");
+
+        const upload = await fetch(`${OPENAI_API}/files`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+          body: form
+        });
+
+        const bodyText = await upload.text();
+        
+        if (!upload.ok) {
+          throw new Error(`File upload failed: ${upload.status} ${bodyText}`);
+        }
+
+        let uploadData;
+        try {
+          uploadData = JSON.parse(bodyText);
+        } catch {
+          throw new Error("Invalid JSON response from file upload");
+        }
+
+        const fileId = uploadData?.id;
+        if (!fileId) {
+          throw new Error("Upload response missing file id");
+        }
+
+        console.log(`✅ File uploaded: ${fileId}`);
+
+        // Create batch job
+        const br = await fetch(`${OPENAI_API}/batches`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            input_file_id: fileId,
+            endpoint: "/v1/chat/completions",
+            completion_window: "24h",
+            metadata: { source: "IELTS-map", type: "SVG-fallback" }
+          })
+        });
+        
+        if (!br.ok) {
+          const errorText = await br.text();
+          throw new Error(`Batch creation failed: ${br.status} ${errorText}`);
+        }
+        
+        const bj = await br.json();
+        
+        if (bj.error) {
+          throw new Error(bj.error.message || "Batch creation error");
+        }
+        
+        if (!bj.id) {
+          throw new Error("Batch response missing job ID");
+        }
+
+        const job_id = `svg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Get feedback
+        let feedback = "";
+        try {
+          const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              messages: [
+                { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
+                { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this map description based on:
+1. Task Achievement
+2. Coherence and Cohesion
+3. Lexical Resource
+4. Grammatical Range and Accuracy
+
+Make section titles bold with **Title**. Be specific and constructive.
+
+ANSWER:
+${content}` },
+              ],
+              temperature: 0.7,
+            }),
+          });
+          
+          if (feedbackRes.ok) {
+            const feedbackJson = await feedbackRes.json();
+            feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "";
+          }
+        } catch (err) {
+          console.error("Feedback generation error:", err);
+        }
+
+        // Store job in Redis
+        const job = {
+          id: job_id,
+          type: 'svg_batch',
+          status: JobStatus.PROCESSING,
+          createdAt: Date.now(),
+          batchId: bj.id,
+          feedback: feedback,
+          result: null,
+          error: null
+        };
+        
+        await redis.setex(job_id, 3600, JSON.stringify(job));
+
+        console.log(`✅ Batch job created: ${bj.id}`);
+        return ok({ 
+          job_id, 
+          status: "submitted",
+          message: "SVG batch job created"
+        });
+        
+      } catch (batchError) {
+        console.error("❌ Batch submission error:", batchError);
+        throw batchError;
+      }
+    }
+
+    // --------------------------------------
+    // 4) Tables & Charts (non-maps, immediate)
+    // --------------------------------------
+    if (requestType === "full-feedback" && taskType !== "maps") {
+      let feedback = "";
+      let asciiTable = null;
+      let generatedImageBase64 = null;
+
+      // Get feedback first
+      const fr = await fetch(`${OPENAI_API}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
+            { 
+              role: "user", 
+              content: `You are an IELTS Task 1 examiner. Evaluate this answer based on:
+1. Task Achievement
+2. Coherence and Cohesion
+3. Lexical Resource
+4. Grammatical Range and Accuracy
+
+Make section titles bold with **Title**. Be specific and constructive.
+
+ANSWER:
+${content}` 
+            },
+          ],
+          temperature: 0.7,
+        }),
+      });
+      
+      if (!fr.ok) {
+        throw new Error(`Feedback API failed: ${fr.status}`);
+      }
+      
+      const fj = await fr.json();
+      feedback = fj?.choices?.[0]?.message?.content?.trim() || "Unable to generate feedback.";
+
+      // Handle tables
+      if (taskType === "table") {
+        const ar = await fetch(`${OPENAI_API}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [
+              { 
+                role: "system", 
+                content: "You are an ASCII table generator. Convert descriptions into precise ASCII tables using | borders and proper alignment. Output ONLY the table, no explanations." 
+              },
+              { 
+                role: "user", 
+                content: `Create an ASCII table based on this description. Use | for borders and align columns properly:\n\n${content}` 
+              },
+            ],
+            temperature: 0.3,
+          }),
+        });
+        
+        if (ar.ok) {
+          const aj = await ar.json();
+          asciiTable = aj?.choices?.[0]?.message?.content?.trim() || "";
+        }
+        
+      } else {
+        // Handle charts via E2B
+        let sandbox = null;
+        try {
+          const cr = await fetch(`${OPENAI_API}/chat/completions`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o",
+              messages: [
+                { 
+                  role: "system", 
+                  content: "You are a Python matplotlib code generator. Output ONLY executable Python code, no markdown, no explanations. Do NOT include plt.show()." 
+                },
+                { 
+                  role: "user", 
+                  content: `Extract ALL data from this description and generate clean matplotlib code to recreate the chart. 
+
+Requirements:
+- Import necessary libraries
+- Extract all numerical data accurately
+- Choose appropriate chart type (${taskType})
+- Add title, axis labels, and legend
+- Use clear colors and styling
+- DO NOT include plt.show()
+
+Description:
+${content}` 
+                },
+              ],
+              temperature: 0.2,
+            }),
+          });
+          
+          if (!cr.ok) {
+            console.warn(`Code generation failed: ${cr.status}`);
+          } else {
+            const cj = await cr.json();
+            let code = (cj?.choices?.[0]?.message?.content || "")
+              .replace(/```python\n?/g, "")
+              .replace(/```\n?/g, "")
+              .replace(/plt\.show\(\)/g, "")
+              .trim();
+
+            if (code) {
+              sandbox = await Sandbox.create({ 
+                apiKey: process.env.E2B_API_KEY, 
+                timeoutMs: 30000 
+              });
+              
+              console.log("Running matplotlib code...");
+              const run = await sandbox.runCode(code);
+              
+              if (run?.results) {
+                for (const r of run.results) {
+                  if (r.png) {
+                    generatedImageBase64 = `data:image/png;base64,${r.png}`;
+                    console.log("✅ Chart generated");
+                    break;
+                  }
+                }
+              }
+              
+              if (!generatedImageBase64) {
+                const saveCode = `
+import matplotlib.pyplot as plt
+import io
+import base64
+
+buf = io.BytesIO()
+plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+buf.seek(0)
+print(base64.b64encode(buf.read()).decode())
+plt.close()
+`;
+                const save = await sandbox.runCode(saveCode);
+                const b64 = (save?.logs?.stdout || []).join("").trim();
+                if (b64 && b64.length > 100) {
+                  generatedImageBase64 = `data:image/png;base64,${b64}`;
+                }
+              }
+            }
+          }
+        } catch (chartError) {
+          console.error("Chart generation error:", chartError);
+        } finally {
+          if (sandbox) {
+            try {
+              await sandbox.close();
+            } catch (closeErr) {
+              console.error("Failed to close sandbox:", closeErr);
+            }
+          }
+        }
+      }
+
+      return ok({ feedback, asciiTable, generatedImageBase64 });
+    }
+
+    // Default fallback
+    return ok({ 
+      feedback: "No operation matched your request."
+    });
+
+  } catch (err) {
+    console.error("❌ HANDLER ERROR:", err);
+    return fail(err);
+  }
+};
+
+// Async PNG processing function
+async function processPngJob(job_id, content, OPENAI_API, redis) {
+  const jobData = await redis.get(job_id);
+  if (!jobData) {
+    console.error(`Job ${job_id} not found in Redis`);
+    return;
+  }
+
+  const job = typeof jobData === 'string' ? JSON.parse(jobData) : jobData;
+  job.status = JobStatus.PROCESSING;
+  await redis.setex(job_id, 3600, JSON.stringify(job));
+  
+  try {
+    const fetch = globalThis.fetch;
+
+    // Get feedback
+    let feedback = "";
+    try {
+      const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
+            { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this map description based on:
+1. Task Achievement
+2. Coherence and Cohesion
+3. Lexical Resource
+4. Grammatical Range and Accuracy
+
+Make section titles bold with **Title**. Be specific and constructive.
+
+ANSWER:
+${content}` },
+          ],
+          temperature: 0.7,
+        }),
+      });
+      
+      if (feedbackRes.ok) {
+        const feedbackJson = await feedbackRes.json();
+        feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "";
+      }
+    } catch (err) {
+      console.error("Feedback generation error:", err);
+    }
+
+    job.feedback = feedback;
+    await redis.setex(job_id, 3600, JSON.stringify(job));
+
+    // Generate image
+    const imgPrompt = `Create a minimalist IELTS exam diagram. Two panels labeled "BEFORE" and "AFTER".
+
+STRICT RULES - Follow EXACTLY:
+1. Only include elements EXPLICITLY mentioned in description below
+2. Simple shapes only: circles for trees, squares for buildings, straight lines for paths
+3. Solid flat colors: blue water, green land, grey paths, yellow labels
+4. Top-down flat view (NO perspective, NO 3D)
+5. If description says "a pier" show ONE pier (not multiple)
+6. If description says "some huts" show simple squares (not detailed buildings)
+
+FORBIDDEN:
+- Multiple piers unless description says "several piers"
+- Bridges unless explicitly mentioned
+- Gradient colors or shading
+- Decorative elements
+- Extra features not mentioned
+
+Description to follow LITERALLY:
+${content.substring(0, 900)}
+
+Style: Elementary school textbook diagram with basic shapes and flat colors.
+NOT artistic, NOT decorative, NOT realistic.`;
+
+    console.log(`🎨 Generating DALL-E image for job ${job_id}...`);
+    const ir = await fetch(`${OPENAI_API}/images/generations`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "dall-e-3",
+        prompt: imgPrompt,
+        size: "1792x1024",
+        quality: "standard",
+        style: "natural",
+        n: 1
+      })
+    });
+
+    if (!ir.ok) {
+      const errorText = await ir.text();
+      throw new Error(`DALL-E failed: ${ir.status} - ${errorText}`);
+    }
+
+    const ij = await ir.json();
+    const imageUrl = ij?.data?.[0]?.url;
+    
+    if (!imageUrl) {
+      throw new Error("No image URL in response");
+    }
+
+    console.log("✅ PNG URL generated, converting to base64...");
+    
+    // Download and convert to base64
+    const imageResponse = await fetch(imageUrl);
+    if (!imageResponse.ok) {
+      throw new Error(`Failed to download image: ${imageResponse.status}`);
+    }
+    
+    const imageBuffer = await imageResponse.arrayBuffer();
+    const base64 = Buffer.from(imageBuffer).toString('base64');
+    
+    // Update job with result
+    job.status = JobStatus.COMPLETED;
+    job.result = {
+      generatedImageBase64: `data:image/png;base64,${base64}`,
+      usedPipeline: "dall-e-3"
+    };
+    await redis.setex(job_id, 3600, JSON.stringify(job));
+
+    console.log(`✅ PNG job ${job_id} completed successfully`);
+
+  } catch (error) {
+    console.error(`❌ PNG job ${job_id} failed:`, error);
+    job.status = JobStatus.FAILED;
+    job.error = error.message;
+    await redis.setex(job_id, 3600, JSON.stringify(job));
+  }
+}
+
+// Helper functions
+function ok(obj) {
+  return {
+    statusCode: 200,
+    headers: { 
+      "Content-Type": "application/json", 
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
+    },
+    body: JSON.stringify(obj),
+  };
+}
+
+function fail(err) {
+  console.error("❌ ERROR:", err);
+  return {
+    statusCode: 500,
+    headers: { 
+      "Content-Type": "application/json", 
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
+    },
+    body: JSON.stringify({ 
+      error: true, 
+      message: err.message || "Internal server error",
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    }),
+  };
+}
