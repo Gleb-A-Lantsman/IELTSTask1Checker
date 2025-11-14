@@ -1,5 +1,5 @@
 // openai-proxy-task1.js
-// PNG first (120s timeout), ASCII fallback, Upstash for both
+// Centralized feedback generation
 
 const { Sandbox } = require("@e2b/code-interpreter");
 const { Redis } = require("@upstash/redis");
@@ -62,6 +62,168 @@ const MAP_EMOJIS = {
   // Default
   "default": "⬜"
 };
+
+// ===================================================================
+// CENTRALIZED FEEDBACK GENERATION
+// ===================================================================
+
+async function generateIELTSFeedback(content, taskType, OPENAI_API) {
+  console.log(`📝 Generating IELTS feedback for ${taskType}...`);
+  
+  const fetch = globalThis.fetch;
+  
+  // Determine task-specific guidance
+  let taskSpecificGuidance = "";
+  
+  if (taskType === "maps") {
+    taskSpecificGuidance = `
+**1. Task Achievement**
+- Does the description cover ALL key features visible in the maps (buildings, roads, natural features, changes)?
+- What percentage of statements are supported by specific data (years, quantities, compass directions)? Calculate this percentage explicitly.
+- Are there any opinions or speculation? (There should be NONE - only factual descriptions)
+- Is there an overview statement summarizing the main changes?
+- Are comparisons made between "before" and "after"?
+
+**2. Coherence and Cohesion**
+- Is the text organized into at least 3 paragraphs (introduction + 2+ body paragraphs)?
+- Does the introduction clearly state what the maps show (location, time periods, what changed)?
+- Does each body paragraph have a clear topic sentence explaining the uniting principle (e.g., "The northern part of the island...", "In terms of accommodation...")?
+- Are there smooth transitions between sentences using cohesive devices (while, whereas, in contrast, additionally)?
+- Are there logical connections between paragraphs?
+- Does it include all output data (years, place names, compass directions, any labels from the legend/key)?
+
+**3. Lexical Resource (Vocabulary)**
+- Are words used accurately and appropriately?
+- Is there variety in vocabulary to avoid repetition (e.g., "constructed/built/developed", "removed/demolished/cleared")?
+- Are there good collocations for describing changes (e.g., "underwent development", "remained unchanged")?
+- Is location vocabulary used effectively (northern/southern, adjacent to, in the vicinity of)?
+
+**4. Grammatical Range and Accuracy**
+- Are sentences grammatically correct?
+- Is there variety in sentence structures (simple, compound, complex)?
+- Are passive constructions used appropriately for describing changes (e.g., "A hotel was built...")?
+- Are there different ways to express changes to avoid repetition?
+- Are tenses used correctly (past simple for completed changes, past perfect for sequences)?`;
+    
+  } else if (taskType === "table") {
+    taskSpecificGuidance = `
+**1. Task Achievement**
+- Does the description cover ALL key data from the table (categories, time periods, major values)?
+- What percentage of statements are supported by specific numbers from the table? Calculate this percentage explicitly.
+- Are there any opinions or speculation? (There should be NONE - only factual descriptions)
+- Is there an overview statement identifying the main trends or most significant data?
+- Are comparisons made between different categories or time periods?
+
+**2. Coherence and Cohesion**
+- Is the text organized into at least 3 paragraphs (introduction + 2+ body paragraphs)?
+- Does the introduction clearly state what the table shows (title, time period, categories, units)?
+- Does each body paragraph have a clear topic sentence explaining what aspect is being discussed?
+- Are there smooth transitions between sentences using cohesive devices (similarly, in contrast, furthermore)?
+- Are there logical connections between paragraphs?
+- Does it include all output data (years, category names, units of measurement)?
+
+**3. Lexical Resource (Vocabulary)**
+- Are words used accurately and appropriately?
+- Is there variety in vocabulary to describe data (e.g., "increased/rose/grew", "decreased/fell/dropped")?
+- Are there good collocations for describing trends (e.g., "experienced a sharp rise", "remained relatively stable")?
+- Are comparison structures used effectively (higher than, the highest, more than)?
+
+**4. Grammatical Range and Accuracy**
+- Are sentences grammatically correct?
+- Is there variety in sentence structures (simple, compound, complex)?
+- Are comparison structures used correctly (comparative and superlative adjectives)?
+- Are there different ways to express data to avoid repetition?
+- Are tenses used correctly (past tense for historical data, present perfect for recent trends)?`;
+    
+  } else {
+    // For charts (line-graph, bar-chart, pie-chart, flowchart)
+    taskSpecificGuidance = `
+**1. Task Achievement**
+- Does the description cover ALL key features of the ${taskType} (major trends, peaks/troughs, significant data points)?
+- What percentage of statements are supported by specific numbers or data from the visual? Calculate this percentage explicitly.
+- Are there any opinions or speculation? (There should be NONE - only factual descriptions)
+- Is there an overview statement identifying the main trends or patterns?
+- Are comparisons made where appropriate?
+
+**2. Coherence and Cohesion**
+- Is the text organized into at least 3 paragraphs (introduction + 2+ body paragraphs)?
+- Does the introduction clearly state what the ${taskType} shows (title, time period, categories, axes, units)?
+- Does each body paragraph have a clear topic sentence explaining what aspect is being discussed?
+- Are there smooth transitions between sentences using cohesive devices (however, moreover, similarly)?
+- Are there logical connections between paragraphs?
+- Does it include all output data (years, category names, axis labels, units of measurement, legend items)?
+
+**3. Lexical Resource (Vocabulary)**
+- Are words used accurately and appropriately?
+- Is there variety in vocabulary to describe trends (e.g., "surged/soared/climbed", "plummeted/declined/decreased")?
+- Are there good collocations for describing changes (e.g., "witnessed a dramatic increase", "fluctuated slightly")?
+- Are numerical expressions varied (approximately, roughly, nearly, just over)?
+
+**4. Grammatical Range and Accuracy**
+- Are sentences grammatically correct?
+- Is there variety in sentence structures (simple, compound, complex)?
+- Are different sentence patterns used to describe trends?
+- Are there various ways to express data to avoid repetition?
+- Are tenses used correctly (past tense for completed periods, present tense for current data)?`;
+  }
+
+  try {
+    const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { 
+            role: "system", 
+            content: "You are an experienced IELTS Writing Task 1 examiner with deep knowledge of the official scoring rubrics. You provide detailed, constructive feedback based on the four assessment criteria." 
+          },
+          { 
+            role: "user", 
+            content: `You are an IELTS Task 1 examiner. Evaluate this ${taskType} description based on the official IELTS criteria. Be specific and constructive.
+
+**ANSWER:**
+${content}
+
+**EVALUATION CRITERIA:**
+
+${taskSpecificGuidance}
+
+**INSTRUCTIONS:**
+- Make section titles bold with **Task Achievement**, **Coherence and Cohesion**, **Lexical Resource**, and **Grammatical Range and Accuracy**
+- Provide specific examples from the text to support your points
+- Calculate and state the percentage of statements supported by data
+- Be constructive and actionable in your feedback
+- Identify both strengths and areas for improvement` 
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: 1500,
+      }),
+    });
+    
+    if (!feedbackRes.ok) {
+      throw new Error(`Feedback API failed: ${feedbackRes.status}`);
+    }
+    
+    const feedbackJson = await feedbackRes.json();
+    const feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "Unable to generate feedback.";
+    
+    console.log("✅ Feedback generated successfully");
+    return feedback;
+    
+  } catch (err) {
+    console.error("❌ Feedback generation error:", err);
+    return "Unable to generate feedback at this time. Please try again.";
+  }
+}
+
+// ===================================================================
+// MAIN HANDLER
+// ===================================================================
 
 exports.handler = async (event) => {
   try {
@@ -171,12 +333,12 @@ exports.handler = async (event) => {
         error: null
       };
       
-      // Store in Redis with 2 hour expiration (increased from 1 hour)
+      // Store in Redis with 2 hour expiration
       await redis.setex(job_id, 7200, JSON.stringify(job));
       console.log(`✅ Job stored in Redis: ${job_id}`);
 
       // Start async processing (don't await)
-      processPngJob(job_id, content, OPENAI_API, redis).catch(err => {
+      processPngJob(job_id, content, taskType, OPENAI_API, redis).catch(err => {
         console.error("PNG job processing error:", err);
       });
 
@@ -211,7 +373,7 @@ exports.handler = async (event) => {
       console.log(`✅ ASCII job stored in Redis: ${job_id}`);
 
       // Start async processing
-      processAsciiMapJob(job_id, content, OPENAI_API, redis).catch(err => {
+      processAsciiMapJob(job_id, content, taskType, OPENAI_API, redis).catch(err => {
         console.error("ASCII map job processing error:", err);
       });
 
@@ -230,41 +392,8 @@ exports.handler = async (event) => {
       let asciiTable = null;
       let generatedImageBase64 = null;
 
-      // Get feedback first
-      const fr = await fetch(`${OPENAI_API}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [
-            { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
-            { 
-              role: "user", 
-              content: `You are an IELTS Task 1 examiner. Evaluate this answer based on:
-1. Task Achievement
-2. Coherence and Cohesion
-3. Lexical Resource
-4. Grammatical Range and Accuracy
-
-Make section titles bold with **Title**. Be specific and constructive.
-
-ANSWER:
-${content}` 
-            },
-          ],
-          temperature: 0.7,
-        }),
-      });
-      
-      if (!fr.ok) {
-        throw new Error(`Feedback API failed: ${fr.status}`);
-      }
-      
-      const fj = await fr.json();
-      feedback = fj?.choices?.[0]?.message?.content?.trim() || "Unable to generate feedback.";
+      // Get feedback using centralized function
+      feedback = await generateIELTSFeedback(content, taskType, OPENAI_API);
 
       // Handle tables
       if (taskType === "table") {
@@ -408,8 +537,11 @@ plt.close()
   }
 };
 
-// Async PNG processing function
-async function processPngJob(job_id, content, OPENAI_API, redis) {
+// ===================================================================
+// ASYNC PNG PROCESSING
+// ===================================================================
+
+async function processPngJob(job_id, content, taskType, OPENAI_API, redis) {
   const jobData = await redis.get(job_id);
   if (!jobData) {
     console.error(`Job ${job_id} not found in Redis`);
@@ -423,42 +555,9 @@ async function processPngJob(job_id, content, OPENAI_API, redis) {
   try {
     const fetch = globalThis.fetch;
 
-    // Get feedback
-    let feedback = "";
-    try {
-      const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [
-            { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
-            { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this map description based on:
-1. Task Achievement
-2. Coherence and Cohesion
-3. Lexical Resource
-4. Grammatical Range and Accuracy
-
-Make section titles bold with **Title**. Be specific and constructive.
-
-ANSWER:
-${content}` },
-          ],
-          temperature: 0.7,
-        }),
-      });
-      
-      if (feedbackRes.ok) {
-        const feedbackJson = await feedbackRes.json();
-        feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "";
-      }
-    } catch (err) {
-      console.error("Feedback generation error:", err);
-    }
-
+    // Get feedback using centralized function
+    const feedback = await generateIELTSFeedback(content, taskType, OPENAI_API);
+    
     job.feedback = feedback;
     await redis.setex(job_id, 7200, JSON.stringify(job));
 
@@ -558,8 +657,11 @@ Style: Official IELTS examination material - clear, educational, professional.`;
   }
 }
 
-// Async ASCII emoji map processing function
-async function processAsciiMapJob(job_id, content, OPENAI_API, redis) {
+// ===================================================================
+// ASYNC ASCII MAP PROCESSING
+// ===================================================================
+
+async function processAsciiMapJob(job_id, content, taskType, OPENAI_API, redis) {
   const jobData = await redis.get(job_id);
   if (!jobData) {
     console.error(`Job ${job_id} not found in Redis`);
@@ -573,43 +675,11 @@ async function processAsciiMapJob(job_id, content, OPENAI_API, redis) {
   try {
     const fetch = globalThis.fetch;
 
-    // Get feedback (reuse from PNG if available, otherwise generate)
+    // Get feedback using centralized function (reuse from PNG if available)
     let feedback = job.feedback || "";
     
     if (!feedback) {
-      try {
-        const feedbackRes = await fetch(`${OPENAI_API}/chat/completions`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "gpt-4o-mini",
-            messages: [
-              { role: "system", content: "You are an experienced IELTS Writing Task 1 examiner." },
-              { role: "user", content: `You are an IELTS Task 1 examiner. Evaluate this map description based on:
-1. Task Achievement
-2. Coherence and Cohesion
-3. Lexical Resource
-4. Grammatical Range and Accuracy
-
-Make section titles bold with **Title**. Be specific and constructive.
-
-ANSWER:
-${content}` },
-            ],
-            temperature: 0.7,
-          }),
-        });
-        
-        if (feedbackRes.ok) {
-          const feedbackJson = await feedbackRes.json();
-          feedback = feedbackJson?.choices?.[0]?.message?.content?.trim() || "";
-        }
-      } catch (err) {
-        console.error("Feedback generation error:", err);
-      }
+      feedback = await generateIELTSFeedback(content, taskType, OPENAI_API);
     }
 
     job.feedback = feedback;
@@ -732,7 +802,10 @@ Output ONLY the maps with labels and legend. No explanations.`;
   }
 }
 
-// Helper functions
+// ===================================================================
+// HELPER FUNCTIONS
+// ===================================================================
+
 function ok(obj) {
   return {
     statusCode: 200,
