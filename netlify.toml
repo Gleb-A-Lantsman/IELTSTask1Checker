@@ -11,6 +11,5 @@
   external_node_modules = ["undici"]
 
 # Scheduled function to keep Upstash Redis active
-[[functions]]
-  name = "keep-redis-alive"
+[functions."keep-redis-alive"]
   schedule = "@daily"
