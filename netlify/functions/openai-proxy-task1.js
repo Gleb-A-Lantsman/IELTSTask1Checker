@@ -575,31 +575,37 @@ async function processPngJob(job_id, content, taskType, OPENAI_API, redis) {
     }
 
     // Generate image with adaptive prompt
-    const imgPrompt = `Create a professional IELTS Task 1 map showing "Before" and "After" side-by-side.
+    const imgPrompt = `Create a professional IELTS Task 1 map comparison showing "BEFORE" and "AFTER" layouts side-by-side.
 
 ${styleGuide}
 
-REQUIREMENTS:
-- Two clearly labeled panels with consistent scale
-- Compass rose (N/S/E/W) if directional info mentioned
-- Legend/key if multiple feature types exist
-- Clear labels for all features
-- Professional exam-quality formatting
+SPATIAL ACCURACY (CRITICAL):
+- Maintain accurate compass directions (${extractDirections(content)})
+- Preserve relative distances and proportions
+- Show exact quantities: ${extractQuantities(content)}
 
-COLORS:
-- Water: blue shades | Vegetation: green shades | Buildings: grey/tan | Roads: grey with dashes
+VISUAL REQUIREMENTS:
+- Two equally-sized panels with shared scale bar
+- Clear "BEFORE" and "AFTER" labels
+- Consistent legend/key between both maps
+- Compass rose if directional information provided
+- Professional examination quality
 
-ACCURACY (CRITICAL):
-- Include ONLY features explicitly mentioned below
-- Correct spatial relationships and quantities
-- No invented or decorative additions
+FEATURES TO INCLUDE:
+${extractFeatures(content)}
 
-Description:
-${content.substring(0, 900)}
+COLORS & STYLE:
+- Water: blue gradient | Vegetation: green tones | Buildings: neutral grey/beige
+- Roads: dark grey with dashes | Labels: black sans-serif
+- ${styleGuide}
+
+Format: High-quality IELTS examination material - educational, precise, uncluttered.
+
+Description: ${content.substring(0, 900)}`
 
 Style: Official IELTS examination material - clear, educational, professional.`;
 
-    console.log(`🎨 Generating DALL-E image for job ${job_id}...`);
+    console.log(`🎨 Generating an image for job ${job_id}...`);
     const ir = await fetch(`${OPENAI_API}/images/generations`, {
       method: "POST",
       headers: {
@@ -607,12 +613,11 @@ Style: Official IELTS examination material - clear, educational, professional.`;
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: "dall-e-3",
-        prompt: imgPrompt,
-        size: "1792x1024",
-        quality: "standard",
-        style: "natural",
-        n: 1
+  model: "gpt-image-1.5",  // Changed from "dall-e-3"
+  prompt: imgPrompt,
+  size: "1792x1024",
+  quality: "standard",
+  n: 1
       })
     });
 
