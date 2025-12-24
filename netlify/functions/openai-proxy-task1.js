@@ -424,104 +424,77 @@ exports.handler = async (event) => {
           asciiTable = aj?.choices?.[0]?.message?.content?.trim() || "";
         }
         
-      } else {
-        // Handle charts via E2B
-        let sandbox = null;
-        try {
-          const cr = await fetch(`${OPENAI_API}/chat/completions`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "gpt-4o",
-              messages: [
-                { 
-                  role: "system", 
-                  content: "You are a Python matplotlib code generator. Output ONLY executable Python code, no markdown, no explanations. Do NOT include plt.show()." 
-                },
-                { 
-                  role: "user", 
-                  content: `Extract ALL data from this description and generate clean matplotlib code to recreate the chart. 
+      } else if (taskType === "flowchart") {
+  // Flowcharts use image generation like maps
+  console.log("📊 Generating flowchart image...");
+  
+  const flowchartPrompt = `Create a professional IELTS Task 1 flowchart/process diagram based on this description.
 
-Requirements:
-- Import necessary libraries
-- Extract all numerical data accurately
-- Choose appropriate chart type (${taskType})
-- Add title, axis labels, and legend
-- Use clear colors and styling
-- DO NOT include plt.show()
+REQUIREMENTS:
+- Clean, professional diagram style
+- Clear arrows showing process flow/sequence
+- Numbered steps if applicable
+- Labels for all stages/components
+- Simple, readable layout
+- Educational quality suitable for IELTS examination
 
-Description:
-${content}` 
-                },
-              ],
-              temperature: 0.2,
-            }),
-          });
-          
-          if (!cr.ok) {
-            console.warn(`Code generation failed: ${cr.status}`);
-          } else {
-            const cj = await cr.json();
-            let code = (cj?.choices?.[0]?.message?.content || "")
-              .replace(/```python\n?/g, "")
-              .replace(/```\n?/g, "")
-              .replace(/plt\.show\(\)/g, "")
-              .trim();
+STYLE:
+- Use simple shapes (rectangles, circles, diamonds)
+- Clear directional arrows
+- Consistent spacing and alignment
+- Professional colors (blues, greys, neutral tones)
+- Black text labels in sans-serif font
 
-            if (code) {
-              sandbox = await Sandbox.create({ 
-                apiKey: process.env.E2B_API_KEY, 
-                timeoutMs: 30000 
-              });
-              
-              console.log("Running matplotlib code...");
-              const run = await sandbox.runCode(code);
-              
-              if (run?.results) {
-                for (const r of run.results) {
-                  if (r.png) {
-                    generatedImageBase64 = `data:image/png;base64,${r.png}`;
-                    console.log("✅ Chart generated");
-                    break;
-                  }
-                }
-              }
-              
-              if (!generatedImageBase64) {
-                const saveCode = `
-import matplotlib.pyplot as plt
-import io
-import base64
+Description: ${content}
 
-buf = io.BytesIO()
-plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-buf.seek(0)
-print(base64.b64encode(buf.read()).decode())
-plt.close()
-`;
-                const save = await sandbox.runCode(saveCode);
-                const b64 = (save?.logs?.stdout || []).join("").trim();
-                if (b64 && b64.length > 100) {
-                  generatedImageBase64 = `data:image/png;base64,${b64}`;
-                }
-              }
-            }
-          }
-        } catch (chartError) {
-          console.error("Chart generation error:", chartError);
-        } finally {
-          if (sandbox) {
-            try {
-              await sandbox.close();
-            } catch (closeErr) {
-              console.error("Failed to close sandbox:", closeErr);
-            }
-          }
+Create a clear, educational flowchart that accurately represents this process.`;
+
+  try {
+    const ir = await fetch(`${OPENAI_API}/images/generations`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "gpt-image-1.5",
+        prompt: flowchartPrompt,
+        size: "1024x1024",
+        n: 1
+      })
+    });
+
+    if (ir.ok) {
+      const ij = await ir.json();
+      let imageUrl = null;
+
+      // Check response structures
+      if (ij?.data?.[0]?.url) {
+        imageUrl = ij.data[0].url;
+      } else if (ij?.data?.[0]?.b64_json) {
+        generatedImageBase64 = `data:image/png;base64,${ij.data[0].b64_json}`;
+        console.log("✅ Flowchart generated (base64)");
+      }
+
+      if (imageUrl) {
+        const imageResponse = await fetch(imageUrl);
+        if (imageResponse.ok) {
+          const imageBuffer = await imageResponse.arrayBuffer();
+          const base64 = Buffer.from(imageBuffer).toString('base64');
+          generatedImageBase64 = `data:image/png;base64,${base64}`;
+          console.log("✅ Flowchart generated");
         }
       }
+    }
+  } catch (flowchartErr) {
+    console.error("Flowchart generation error:", flowchartErr);
+  }
+  
+} else {
+  // Handle other charts (line-graph, bar-chart, pie-chart) via E2B
+  let sandbox = null;
+  try {
+    const cr = await fetch(`${OPENAI_API}/chat/completions`, {
 
       return ok({ feedback, asciiTable, generatedImageBase64 });
     }
