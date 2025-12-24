@@ -612,13 +612,12 @@ Style: Official IELTS examination material - clear, educational, professional.`;
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({
-  model: "gpt-image-1.5",  // Changed from "dall-e-3"
-  prompt: imgPrompt,
-  size: "1792x1024",
-  quality: "standard",
-  n: 1
-      })
+        body: JSON.stringify({
+        model: "gpt-image-1.5",
+        prompt: imgPrompt,
+        size: "1024x1024",
+        n: 1
+})
     });
 
     if (!ir.ok) {
