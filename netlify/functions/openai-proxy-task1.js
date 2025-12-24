@@ -494,9 +494,29 @@ Create a clear, educational flowchart that accurately represents this process.`;
   // Handle other charts (line-graph, bar-chart, pie-chart) via E2B
   let sandbox = null;
   try {
-    const cr = await fetch(`${OPENAI_API}/chat/completions`, {
+    sandbox = await Sandbox.create();
+    
+    const pythonCode = `
+import matplotlib.pyplot as plt
+import numpy as np
+# ... generate chart based on description
+plt.savefig('chart.png', dpi=150, bbox_inches='tight')
+`;
+    
+    const execution = await sandbox.runCode(pythonCode);
+    
+    if (execution.results.length > 0) {
+      const chartImage = execution.results[0];
+      generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
+    }
+  } catch (chartErr) {
+    console.error("Chart generation error:", chartErr);
+  } finally {
+    if (sandbox) await sandbox.close();
+  }
+}
 
-      return ok({ feedback, asciiTable, generatedImageBase64 });
+return ok({ feedback, asciiTable, generatedImageBase64 });
     }
 
     // Default fallback
