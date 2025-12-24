@@ -227,20 +227,20 @@ ${taskSpecificGuidance}
 
 exports.handler = async (event) => {
   try {
-    const body = JSON.parse(event.body || "{}");
-    const {
-      content,
-      requestType,
-      taskType,
-      imageUrl,
-      imageName,
-      phase,
-      job_id
-    } = body;
+const body = JSON.parse(event.body || "{}");
+let {  
+  content,
+  requestType,
+  taskType,
+  imageUrl,
+  imageName,
+  phase,
+  job_id
+} = body;
 
-    if (requestType === "full-feedback" && (taskType === "maps" || taskType === "flowchart") && !phase) {
-      phase = "submit"; 
-    }
+if (requestType === "full-feedback" && (taskType === "maps" || taskType === "flowchart") && !phase) {
+  phase = "submit";  // ✅ Now this works!
+}
 
 
     const OPENAI_API = "https://api.openai.com/v1";
