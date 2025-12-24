@@ -604,41 +604,85 @@ Format: High-quality IELTS examination material - educational, precise, unclutte
 Description: ${content.substring(0, 900)}`
 
 console.log(`🎨 Generating an image for job ${job_id}...`);
-    console.log(`Using model: gpt-image-1.5`);
-    console.log(`Prompt length: ${imgPrompt.length}`);
+console.log(`Using model: gpt-image-1.5`);
+console.log(`Prompt length: ${imgPrompt.length}`);
 
-    const requestBody = {
-      model: "gpt-image-1.5",
-      prompt: imgPrompt,
-      size: "1024x1024",
-      n: 1
-    };
+const requestBody = {
+  model: "gpt-image-1.5",
+  prompt: imgPrompt,
+  size: "1024x1024",
+  n: 1
+};
 
-    console.log(`Request body:`, JSON.stringify(requestBody, null, 2));
+console.log(`Request body:`, JSON.stringify(requestBody, null, 2));
 
-    const ir = await fetch(`${OPENAI_API}/images/generations`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(requestBody)
-    });
+const ir = await fetch(`${OPENAI_API}/images/generations`, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify(requestBody)
+});
 
-    console.log(`Response status: ${ir.status}`);
-    const responseText = await ir.text();
-    console.log(`Response body: ${responseText}`);
+console.log(`Response status: ${ir.status}`);
+const responseText = await ir.text();
+console.log(`Response body (full): ${responseText}`);
 
-    if (!ir.ok) {
-      throw new Error(`DALL-E failed: ${ir.status} - ${responseText}`);
-    }
+if (!ir.ok) {
+  throw new Error(`Image API failed: ${ir.status} - ${responseText}`);
+}
 
-    const ij = JSON.parse(responseText);
-    const imageUrl = ij?.data?.[0]?.url;
-    
-    if (!imageUrl) {
-      throw new Error("No image URL in response");
-    }
+let ij;
+try {
+  ij = JSON.parse(responseText);
+  console.log(`Parsed response:`, JSON.stringify(ij, null, 2));
+} catch (parseErr) {
+  throw new Error(`Failed to parse response: ${parseErr.message}`);
+}
+
+// Check multiple possible response structures
+let imageUrl = null;
+
+// Structure 1: Standard OpenAI format
+if (ij?.data?.[0]?.url) {
+  imageUrl = ij.data[0].url;
+  console.log(`✅ Found image URL in data[0].url: ${imageUrl}`);
+}
+// Structure 2: Alternative format
+else if (ij?.data?.[0]?.image_url) {
+  imageUrl = ij.data[0].image_url;
+  console.log(`✅ Found image URL in data[0].image_url: ${imageUrl}`);
+}
+// Structure 3: Direct URL
+else if (ij?.url) {
+  imageUrl = ij.url;
+  console.log(`✅ Found image URL in root url: ${imageUrl}`);
+}
+// Structure 4: Base64 encoded (some models return this)
+else if (ij?.data?.[0]?.b64_json) {
+  console.log(`✅ Found base64 image in response`);
+  // Skip download step, use base64 directly
+  const base64 = ij.data[0].b64_json;
+  
+  job.status = JobStatus.COMPLETED;
+  job.result = {
+    generatedImageBase64: `data:image/png;base64,${base64}`,
+    usedPipeline: "gpt-image-1.5"
+  };
+  await redis.setex(job_id, 7200, JSON.stringify(job));
+  console.log(`✅ PNG job ${job_id} completed successfully (base64)`);
+  return;
+}
+
+if (!imageUrl) {
+  console.error(`❌ Could not find image URL in response structure`);
+  console.error(`Available keys in response:`, Object.keys(ij));
+  if (ij?.data?.[0]) {
+    console.error(`Available keys in data[0]:`, Object.keys(ij.data[0]));
+  }
+  throw new Error("No image URL found in any expected location");
+}
 
     console.log("✅ PNG URL generated, converting to base64...");
     
