@@ -381,7 +381,7 @@
         <li><strong>Write at least 150 words</strong> describing the visual information</li>
         <li>Click <strong>"Help me!"</strong> for quick tips while writing</li>
         <li>Click <strong>"Get Feedback"</strong> to see how well your description matches the image</li>
-        <li>For maps, the AI will generate a visualization (PNG first with 2-minute timeout, ASCII emoji fallback if needed)</li>
+        <li>For maps/flowcharts, the AI will generate a visualization (takes 30-60 seconds)</li>
       </ul>
     </div>
 
@@ -505,11 +505,10 @@
           comparisonContainer.style.display = 'none';
           pollStatus.style.display = 'none';
           
-          let label = taskType === 'maps' 
-            ? 'Preparing map generation...' 
-            : taskType === 'table'
-            ? 'Generating ASCII table...'
-            : 'Generating chart...';
+          let label = 'Processing...';
+          if (taskType === 'maps' || taskType === 'flowchart') {
+            label = `Generating ${taskType}... (30-60 seconds)`;
+          }
           
           progressLabel.textContent = label;
           progressBarFill.style.width = '10%';
@@ -683,19 +682,19 @@
           const content = essayTextarea.value;
 
           try {
-            // MAPS: Async PNG (2x timeout) with ASCII fallback
-            if (currentCategory === "maps" && type === "full-feedback") {
-              showProgressBar('maps');
-              updateProgress(10, 'Submitting PNG generation job...');
+            // ✅ ASYNC JOBS: Maps and Flowcharts
+            if ((currentCategory === "maps" || currentCategory === "flowchart") && type === "full-feedback") {
+              showProgressBar(currentCategory);
+              updateProgress(10, `Submitting ${currentCategory} job...`);
 
               const submitResponse = await fetch(`${API_BASE}/openai-proxy-task1`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  phase: "submit",
                   requestType: "full-feedback",
-                  taskType: "maps",
-                  content
+                  taskType: currentCategory,
+                  content: content
+                  // No need to specify phase - backend defaults to "submit"
                 })
               });
 
@@ -705,274 +704,31 @@
 
               const submitData = await submitResponse.json();
               
-              if (submitData.error || !submitData.job_id) {
-                throw new Error(submitData.message || 'Failed to submit PNG job');
-              }
-
-              const job_id = submitData.job_id;
-              console.log("✅ PNG job submitted:", job_id);
-
-              updateProgress(20, 'PNG generation in progress...');
-              pollStatus.style.display = 'block';
-              pollStatus.textContent = 'Generating PNG map...';
-
-              pollAttempts = 0;
-              const MAX_PNG_ATTEMPTS = 60; // 120 seconds (2x original)
-              
-              const pollForPngResults = async () => {
-                pollAttempts++;
+              // ✅ Check for async job response
+              if (submitData.job_id && submitData.status === 'submitted') {
+                console.log(`✅ ${currentCategory} job submitted:`, submitData.job_id);
                 
-                if (pollAttempts > MAX_PNG_ATTEMPTS) {
-                  console.warn("⚠️ PNG taking too long, falling back to ASCII...");
-                  clearInterval(pollInterval);
-                  pollInterval = null;
-                  
-                  updateProgress(25, 'PNG timeout - switching to ASCII...');
-                  startAsciiFallback();
-                  return;
-                }
-
-                const progress = Math.min(20 + (pollAttempts / MAX_PNG_ATTEMPTS) * 60, 80);
-                updateProgress(progress, 'Generating PNG map...');
-                pollStatus.textContent = `Checking PNG status (${pollAttempts}/${MAX_PNG_ATTEMPTS})...`;
-
-                try {
-                  const pollResponse = await fetch(`${API_BASE}/openai-proxy-task1`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      phase: "poll",
-                      job_id
-                    })
-                  });
-
-                  if (!pollResponse.ok) {
-                    throw new Error(`Poll failed: ${pollResponse.status}`);
-                  }
-
-                  const pollData = await pollResponse.json();
-                  console.log(`⏳ PNG Poll ${pollAttempts}:`, pollData.status);
-
-                  if (pollData.status === "error") {
-                    console.warn("PNG generation failed:", pollData.error);
-                    clearInterval(pollInterval);
-                    pollInterval = null;
-                    
-                    updateProgress(25, 'PNG failed - switching to ASCII...');
-                    startAsciiFallback();
-                    return;
-                  }
-
-                  if (pollData.status === "completed" && pollData.generatedImageBase64) {
-                    clearInterval(pollInterval);
-                    pollInterval = null;
-                    
-                    console.log("✅ PNG received");
-                    updateProgress(95, 'Finalizing...');
-                    
-                    feedbackContainer.innerHTML = formatFullFeedback(
-                      pollData.feedback || "**Task Achievement**: Map generated successfully."
-                    );
-
-                    comparisonContainer.style.display = "block";
-                    comparisonContainer.innerHTML = `
-                      <div class="comparison-container">
-                        <div class="comparison-side">
-                          <h5>🗺️ Original Task Image</h5>
-                          <img src="${currentImageUrl}" alt="Original map">
-                        </div>
-                        <div class="comparison-side">
-                          <h5>🖼️ PNG Generated from Your Description</h5>
-                          <img src="${pollData.generatedImageBase64}" alt="Generated map" style="max-width:100%;border-radius:4px;">
-                          <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
-                            Generated using DALL-E 3. AI can make mistakes, check carefully.
-                          </p>
-                        </div>
-                      </div>
-                    `;
-
-                    hideProgressBar();
-                    isLoading = false;
-                    feedbackButton.disabled = false;
-                    helpButton.disabled = false;
-                  }
-                } catch (pollError) {
-                  console.error('PNG poll error:', pollError);
-                  clearInterval(pollInterval);
-                  pollInterval = null;
-                  
-                  updateProgress(25, 'Error - switching to ASCII...');
-                  startAsciiFallback();
-                }
-              };
-
-              const startAsciiFallback = async () => {
-                try {
-                  console.log("🗺️ Starting ASCII emoji fallback...");
-                  pollStatus.textContent = 'Submitting ASCII job...';
-                  
-                  const asciiSubmitResponse = await fetch(`${API_BASE}/openai-proxy-task1`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      phase: "submit-ascii",
-                      requestType: "full-feedback",
-                      taskType: "maps",
-                      content
-                    })
-                  });
-
-                  if (!asciiSubmitResponse.ok) {
-                    throw new Error(`ASCII submit failed: ${asciiSubmitResponse.status}`);
-                  }
-
-                  const asciiSubmitData = await asciiSubmitResponse.json();
-                  
-                  if (asciiSubmitData.error || !asciiSubmitData.job_id) {
-                    throw new Error(asciiSubmitData.message || 'Failed to submit ASCII job');
-                  }
-
-                  const ascii_job_id = asciiSubmitData.job_id;
-                  console.log("✅ ASCII job submitted:", ascii_job_id);
-
-                  updateProgress(30, 'ASCII generation in progress...');
-                  pollStatus.textContent = 'Generating ASCII emoji maps...';
-
-                  pollAttempts = 0;
-                  const MAX_ASCII_ATTEMPTS = 30; // 60 seconds for ASCII
-                  
-                  const pollForAsciiResults = async () => {
-                    pollAttempts++;
-                    
-                    if (pollAttempts > MAX_ASCII_ATTEMPTS) {
-                      clearInterval(pollInterval);
-                      pollInterval = null;
-                      hideProgressBar();
-                      isLoading = false;
-                      feedbackButton.disabled = false;
-                      helpButton.disabled = false;
-                      
-                      feedbackContainer.innerHTML = `
-                        <h4>Complete Feedback</h4>
-                        <p class="error-message">⚠️ Timeout: ASCII generation took too long. Please try again.</p>
-                      `;
-                      return;
-                    }
-
-                    const progress = Math.min(30 + (pollAttempts / MAX_ASCII_ATTEMPTS) * 60, 90);
-                    updateProgress(progress, 'Generating ASCII emoji maps...');
-                    pollStatus.textContent = `ASCII status check ${pollAttempts}/${MAX_ASCII_ATTEMPTS}...`;
-
-                    try {
-                      const asciiPollResponse = await fetch(`${API_BASE}/openai-proxy-task1`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          phase: "poll",
-                          job_id: ascii_job_id
-                        })
-                      });
-
-                      if (!asciiPollResponse.ok) {
-                        throw new Error(`ASCII poll failed: ${asciiPollResponse.status}`);
-                      }
-
-                      const asciiPollData = await asciiPollResponse.json();
-                      console.log(`⏳ ASCII Poll ${pollAttempts}:`, asciiPollData.status);
-
-                      if (asciiPollData.status === "error") {
-                        clearInterval(pollInterval);
-                        pollInterval = null;
-                        throw new Error(asciiPollData.error || 'ASCII job failed');
-                      }
-
-                      if (asciiPollData.status === "completed" && asciiPollData.asciiMaps) {
-                        clearInterval(pollInterval);
-                        pollInterval = null;
-                        
-                        console.log("✅ ASCII maps received");
-                        updateProgress(95, 'Finalizing...');
-                        
-                        feedbackContainer.innerHTML = formatFullFeedback(
-                          asciiPollData.feedback || "**Task Achievement**: ASCII maps generated (fallback)."
-                        );
-
-                        comparisonContainer.style.display = "block";
-                        comparisonContainer.innerHTML = `
-                          <div class="comparison-container">
-                            <div class="comparison-side">
-                            <h5>🗺️ Original Task Image</h5>
-                              <img src="${currentImageUrl}" alt="Original map">
-                                  </div>
-                                  <div class="comparison-side">
-                                    <h5>🗺️ ASCII Emoji Maps from Your Description</h5>
-                                      <pre style="
-                                        background: #1e1e1e;
-                                        color: #ffffff;
-                                        padding: 20px;
-                                          border-radius: 8px;
-                                        font-family: 'Courier New', 'Consolas', monospace;
-                                        font-size: 20px;
-                                        line-height: 1.2;
-                                        letter-spacing: 0;
-                                          overflow-x: auto;
-                                          white-space: pre;
-                                          display: inline-block;
-                                          ">${asciiPollData.asciiMaps}</pre>
-                                            <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
-                                              Generated using ASCII emojis (fallback). AI can make mistakes, check carefully.
-                                              </p>
-                                            </div>
-                                              </div>
-                                              `;
-
-                        hideProgressBar();
-                        isLoading = false;
-                        feedbackButton.disabled = false;
-                        helpButton.disabled = false;
-                      }
-                    } catch (asciiPollError) {
-                      console.error('ASCII poll error:', asciiPollError);
-                      clearInterval(pollInterval);
-                      pollInterval = null;
-                      hideProgressBar();
-                      isLoading = false;
-                      feedbackButton.disabled = false;
-                      helpButton.disabled = false;
-                      
-                      feedbackContainer.innerHTML = `
-                        <h4>Complete Feedback</h4>
-                        <p class="error-message">⚠️ Error: ${asciiPollError.message}</p>
-                      `;
-                    }
-                  };
-
-                  if (pollInterval) clearInterval(pollInterval);
-                  pollInterval = setInterval(pollForAsciiResults, 2000);
-                  pollForAsciiResults();
-                  
-                } catch (asciiError) {
-                  console.error('ASCII fallback error:', asciiError);
-                  hideProgressBar();
-                  isLoading = false;
-                  feedbackButton.disabled = false;
-                  helpButton.disabled = false;
-                  
-                  feedbackContainer.innerHTML = `
-                    <h4>Complete Feedback</h4>
-                    <p class="error-message">⚠️ Both PNG and ASCII generation failed. Please try again.</p>
-                  `;
-                }
-              };
-
-              if (pollInterval) clearInterval(pollInterval);
-              pollInterval = setInterval(pollForPngResults, 2000);
-              pollForPngResults();
+                updateProgress(20, `${currentCategory} generation in progress...`);
+                pollStatus.style.display = 'block';
+                pollStatus.textContent = `Generating ${currentCategory}...`;
+                
+                // Start polling
+                pollJobStatus(submitData.job_id, currentCategory);
+                return;
+              }
+              
+              // If not async (shouldn't happen), handle as immediate
+              if (submitData.feedback) {
+                displayFullFeedback(submitData);
+                hideProgressBar();
+              } else {
+                throw new Error('Unexpected response format');
+              }
               
               return;
             }
 
-            // NON-MAPS feedback
+            // ✅ IMMEDIATE RESPONSE: Help, Tables, Charts
             if (type === 'help') {
               showProgressBar('help');
               updateProgress(50, 'Getting feedback...');
@@ -1045,14 +801,98 @@
           }
         }
 
-        function displayFullFeedback(data) {
-          feedbackContainer.innerHTML = formatFullFeedback(data.feedback);
+        // ✅ NEW POLLING FUNCTION
+        async function pollJobStatus(job_id, taskType) {
+          pollAttempts = 0;
+          const maxAttempts = 60; // 120 seconds (2 minutes)
 
-          comparisonContainer.innerHTML = "";
-          comparisonContainer.style.display = "block";
+          const checkStatus = async () => {
+            pollAttempts++;
 
-          if (data.asciiTable) {
-            comparisonContainer.innerHTML = `
+            if (pollAttempts > maxAttempts) {
+              clearInterval(pollInterval);
+              pollInterval = null;
+              hideProgressBar();
+              isLoading = false;
+              feedbackButton.disabled = false;
+              helpButton.disabled = false;
+
+              feedbackContainer.innerHTML = `
+                <h4>Complete Feedback</h4>
+                <p class="error-message">⏱️ Timeout: ${taskType} generation took too long. Please try again.</p>
+              `;
+              return;
+            }
+
+            const progress = Math.min(20 + (pollAttempts / maxAttempts) * 70, 90);
+            updateProgress(progress, `Generating ${taskType}...`);
+            pollStatus.textContent = `Checking status (${pollAttempts}/${maxAttempts})...`;
+
+            try {
+              const pollResponse = await fetch(`${API_BASE}/openai-proxy-task1`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  phase: "poll",
+                  job_id: job_id
+                })
+              });
+
+              if (!pollResponse.ok) {
+                throw new Error(`Poll failed: ${pollResponse.status}`);
+              }
+
+              const pollData = await pollResponse.json();
+              console.log(`⏳ Poll ${pollAttempts}:`, pollData.status);
+
+              if (pollData.status === "error" || pollData.status === "failed") {
+                clearInterval(pollInterval);
+                pollInterval = null;
+                hideProgressBar();
+                isLoading = false;
+                feedbackButton.disabled = false;
+                helpButton.disabled = false;
+
+                feedbackContainer.innerHTML = `
+                  <h4>Complete Feedback</h4>
+                  <p class="error-message">❌ Generation failed: ${pollData.error || 'Unknown error'}</p>
+                `;
+                return;
+              }
+
+              if (pollData.status === "completed") {
+                clearInterval(pollInterval);
+                pollInterval = null;
+
+                console.log(`✅ ${taskType} generation completed`);
+                updateProgress(95, 'Finalizing...');
+
+                // Display feedback
+                feedbackContainer.innerHTML = formatFullFeedback(
+                  pollData.feedback || `**Task Achievement**: ${taskType} generated successfully.`
+                );
+
+                // Display visualization
+                comparisonContainer.style.display = "block";
+                
+                if (pollData.generatedImageBase64) {
+                  comparisonContainer.innerHTML = `
+                    <div class="comparison-container">
+                      <div class="comparison-side">
+                        <h5>📊 Original Task Image</h5>
+                        <img src="${currentImageUrl}" alt="Original ${taskType}">
+                      </div>
+                      <div class="comparison-side">
+                        <h5>🎨 Generated from Your Description</h5>
+                        <img src="${pollData.generatedImageBase64}" alt="Generated ${taskType}" style="max-width:100%;border-radius:4px;">
+                        <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
+                          Generated using DALL-E 3. AI can make mistakes, check carefully.
+                        </p>
+                      </div>
+                    </div>
+                  `;
+                } else if (pollData.asciiMaps) {
+                  comparisonContainer.innerHTML = `
               <div class="comparison-container">
                 <div class="comparison-side">
                   <h5>📊 Original Task Image</h5>
