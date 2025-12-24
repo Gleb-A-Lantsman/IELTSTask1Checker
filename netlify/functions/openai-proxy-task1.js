@@ -238,6 +238,11 @@ exports.handler = async (event) => {
       job_id
     } = body;
 
+    if (requestType === "full-feedback" && (taskType === "maps" || taskType === "flowchart") && !phase) {
+      phase = "submit"; 
+    }
+
+
     const OPENAI_API = "https://api.openai.com/v1";
     const fetch = globalThis.fetch;
 
@@ -318,7 +323,6 @@ exports.handler = async (event) => {
     // --------------------------------------------------
     if (requestType === "full-feedback" && (taskType === "maps" || taskType === "flowchart") && phase === "submit") {
       console.log(`🖼️ Submitting async ${taskType} generation job...`);
-      
       const job_id = `img-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       
       const job = {
