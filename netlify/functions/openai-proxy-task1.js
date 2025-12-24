@@ -603,29 +603,37 @@ Format: High-quality IELTS examination material - educational, precise, unclutte
 
 Description: ${content.substring(0, 900)}`
 
-Style: Official IELTS examination material - clear, educational, professional.`;
+console.log(`🎨 Generating an image for job ${job_id}...`);
+    console.log(`Using model: gpt-image-1.5`);
+    console.log(`Prompt length: ${imgPrompt.length}`);
 
-    console.log(`🎨 Generating an image for job ${job_id}...`);
+    const requestBody = {
+      model: "gpt-image-1.5",
+      prompt: imgPrompt,
+      size: "1024x1024",
+      n: 1
+    };
+
+    console.log(`Request body:`, JSON.stringify(requestBody, null, 2));
+
     const ir = await fetch(`${OPENAI_API}/images/generations`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json"
       },
-        body: JSON.stringify({
-        model: "gpt-image-1.5",
-        prompt: imgPrompt,
-        size: "1024x1024",
-        n: 1
-})
+      body: JSON.stringify(requestBody)
     });
 
+    console.log(`Response status: ${ir.status}`);
+    const responseText = await ir.text();
+    console.log(`Response body: ${responseText}`);
+
     if (!ir.ok) {
-      const errorText = await ir.text();
-      throw new Error(`DALL-E failed: ${ir.status} - ${errorText}`);
+      throw new Error(`DALL-E failed: ${ir.status} - ${responseText}`);
     }
 
-    const ij = await ir.json();
+    const ij = JSON.parse(responseText);
     const imageUrl = ij?.data?.[0]?.url;
     
     if (!imageUrl) {
@@ -804,6 +812,47 @@ Output ONLY the maps in monospace format. No markdown code blocks, no explanatio
     job.error = error.message;
     await redis.setex(job_id, 3600, JSON.stringify(job));
   }
+}
+
+// ===================================================================
+// HELPER FUNCTIONS FOR PROMPT GENERATION
+// ===================================================================
+
+function extractDirections(content) {
+  const directions = [];
+  if (/north/i.test(content)) directions.push("north");
+  if (/south/i.test(content)) directions.push("south");
+  if (/east/i.test(content)) directions.push("east");
+  if (/west/i.test(content)) directions.push("west");
+  return directions.length > 0 ? directions.join(", ") : "not specified";
+}
+
+function extractQuantities(content) {
+  const quantities = [];
+  const numberMatches = content.match(/\d+\s+(?:building|house|hotel|shop|road|tree|facility|facilities)/gi);
+  if (numberMatches && numberMatches.length > 0) {
+    return numberMatches.slice(0, 5).join(", ");
+  }
+  return "see description";
+}
+
+function extractFeatures(content) {
+  const features = [];
+  
+  // Natural features
+  if (/beach|coast|shore/i.test(content)) features.push("- Beach/coastal areas");
+  if (/forest|tree|woodland/i.test(content)) features.push("- Trees/forested areas");
+  if (/water|lake|pond|river/i.test(content)) features.push("- Water bodies");
+  
+  // Built structures
+  if (/road|street|path/i.test(content)) features.push("- Roads/pathways");
+  if (/hotel|accommodation/i.test(content)) features.push("- Hotels/accommodation");
+  if (/house|housing|residential/i.test(content)) features.push("- Residential buildings");
+  if (/restaurant|cafe/i.test(content)) features.push("- Restaurants/cafes");
+  if (/shop|store/i.test(content)) features.push("- Shops/retail");
+  if (/pier|dock/i.test(content)) features.push("- Pier/dock structures");
+  
+  return features.length > 0 ? features.join("\n") : "- General buildings and features";
 }
 
 // ===================================================================
