@@ -482,10 +482,14 @@ exports.handler = async (event) => {
       feedback: "No operation matched your request."
     });
 
-  } catch (err) {
-    console.error("❌ HANDLER ERROR:", err);
-    return fail(err);
-  }
+    } catch (err) {
+  console.error("❌ HANDLER ERROR:", err);
+  console.error("Error name:", err.name);
+  console.error("Error message:", err.message);
+  console.error("Error stack:", err.stack);
+  
+  return fail(err);
+}
 };
 
 // ===================================================================
