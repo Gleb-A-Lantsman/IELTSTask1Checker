@@ -314,38 +314,37 @@ exports.handler = async (event) => {
     }
 
     // --------------------------------------------------
-    // 2) MAPS - SUBMIT PNG JOB (async, 2x timeout)
+    // 2) MAPS & FLOWCHARTS - SUBMIT IMAGE JOB (async)
     // --------------------------------------------------
-    if (requestType === "full-feedback" && taskType === "maps" && phase === "submit") {
-      console.log("🖼️ Submitting async PNG generation job...");
+    if (requestType === "full-feedback" && (taskType === "maps" || taskType === "flowchart") && phase === "submit") {
+      console.log(`🖼️ Submitting async ${taskType} generation job...`);
       
-      const job_id = `png-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const job_id = `img-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       
-      // Create job entry
       const job = {
         id: job_id,
-        type: 'png_dalle',
+        type: taskType === "maps" ? 'png_dalle' : 'flowchart_dalle',
         status: JobStatus.PENDING,
         createdAt: Date.now(),
         content: content,
+        taskType: taskType,
         feedback: null,
         result: null,
         error: null
       };
       
-      // Store in Redis with 2 hour expiration
       await redis.setex(job_id, 7200, JSON.stringify(job));
       console.log(`✅ Job stored in Redis: ${job_id}`);
 
-      // Start async processing (don't await)
+      // Start async processing (same function for both!)
       processPngJob(job_id, content, taskType, OPENAI_API, redis).catch(err => {
-        console.error("PNG job processing error:", err);
+        console.error(`${taskType} job processing error:`, err);
       });
 
       return ok({ 
         job_id, 
         status: "submitted",
-        message: "PNG generation started"
+        message: `${taskType} generation started`
       });
     }
 
@@ -357,7 +356,6 @@ exports.handler = async (event) => {
       
       const job_id = `ascii-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       
-      // Create job entry
       const job = {
         id: job_id,
         type: 'ascii_map',
@@ -385,9 +383,9 @@ exports.handler = async (event) => {
     }
 
     // --------------------------------------
-    // 4) Tables & Charts (non-maps, immediate)
+    // 4) Tables & Charts ONLY (non-maps, non-flowchart, immediate)
     // --------------------------------------
-    if (requestType === "full-feedback" && taskType !== "maps") {
+    if (requestType === "full-feedback" && taskType !== "maps" && taskType !== "flowchart") {
       let feedback = "";
       let asciiTable = null;
       let generatedImageBase64 = null;
@@ -424,99 +422,55 @@ exports.handler = async (event) => {
           asciiTable = aj?.choices?.[0]?.message?.content?.trim() || "";
         }
         
-      } else if (taskType === "flowchart") {
-  // Flowcharts use image generation like maps
-  console.log("📊 Generating flowchart image...");
-  
-  const flowchartPrompt = `Create a professional IELTS Task 1 flowchart/process diagram based on this description.
-
-REQUIREMENTS:
-- Clean, professional diagram style
-- Clear arrows showing process flow/sequence
-- Numbered steps if applicable
-- Labels for all stages/components
-- Simple, readable layout
-- Educational quality suitable for IELTS examination
-
-STYLE:
-- Use simple shapes (rectangles, circles, diamonds)
-- Clear directional arrows
-- Consistent spacing and alignment
-- Professional colors (blues, greys, neutral tones)
-- Black text labels in sans-serif font
-
-Description: ${content}
-
-Create a clear, educational flowchart that accurately represents this process.`;
-
-  try {
-    const ir = await fetch(`${OPENAI_API}/images/generations`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "gpt-image-1.5",
-        prompt: flowchartPrompt,
-        size: "1024x1024",
-        n: 1
-      })
-    });
-
-    if (ir.ok) {
-      const ij = await ir.json();
-      let imageUrl = null;
-
-      // Check response structures
-      if (ij?.data?.[0]?.url) {
-        imageUrl = ij.data[0].url;
-      } else if (ij?.data?.[0]?.b64_json) {
-        generatedImageBase64 = `data:image/png;base64,${ij.data[0].b64_json}`;
-        console.log("✅ Flowchart generated (base64)");
-      }
-
-      if (imageUrl) {
-        const imageResponse = await fetch(imageUrl);
-        if (imageResponse.ok) {
-          const imageBuffer = await imageResponse.arrayBuffer();
-          const base64 = Buffer.from(imageBuffer).toString('base64');
-          generatedImageBase64 = `data:image/png;base64,${base64}`;
-          console.log("✅ Flowchart generated");
+      } else {
+        // Handle other charts (line-graph, bar-chart, pie-chart) via E2B
+        let sandbox = null;
+        try {
+          sandbox = await Sandbox.create();
+          
+          const pythonPrompt = `Create Python matplotlib code to generate a ${taskType} based on this description: ${content}`;
+          
+          const codeResponse = await fetch(`${OPENAI_API}/chat/completions`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              messages: [
+                { role: "system", content: "You are a Python matplotlib expert. Generate only the Python code, no explanations." },
+                { role: "user", content: pythonPrompt },
+              ],
+              temperature: 0.3,
+            }),
+          });
+          
+          if (codeResponse.ok) {
+            const codeJson = await codeResponse.json();
+            const pythonCode = codeJson?.choices?.[0]?.message?.content?.trim() || "";
+            
+            if (pythonCode) {
+              const execution = await sandbox.runCode(pythonCode);
+              if (execution.results && execution.results.length > 0) {
+                const chartImage = execution.results[0];
+                if (chartImage.png) {
+                  generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
+                  console.log("✅ Chart generated via E2B");
+                }
+              }
+            }
+          }
+        } catch (chartErr) {
+          console.error("Chart generation error:", chartErr);
+        } finally {
+          if (sandbox) {
+            await sandbox.close();
+          }
         }
       }
-    }
-  } catch (flowchartErr) {
-    console.error("Flowchart generation error:", flowchartErr);
-  }
-  
-} else {
-  // Handle other charts (line-graph, bar-chart, pie-chart) via E2B
-  let sandbox = null;
-  try {
-    sandbox = await Sandbox.create();
-    
-    const pythonCode = `
-import matplotlib.pyplot as plt
-import numpy as np
-# ... generate chart based on description
-plt.savefig('chart.png', dpi=150, bbox_inches='tight')
-`;
-    
-    const execution = await sandbox.runCode(pythonCode);
-    
-    if (execution.results.length > 0) {
-      const chartImage = execution.results[0];
-      generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
-    }
-  } catch (chartErr) {
-    console.error("Chart generation error:", chartErr);
-  } finally {
-    if (sandbox) await sandbox.close();
-  }
-}
 
-return ok({ feedback, asciiTable, generatedImageBase64 });
+      return ok({ feedback, asciiTable, generatedImageBase64 });
     }
 
     // Default fallback
@@ -531,7 +485,7 @@ return ok({ feedback, asciiTable, generatedImageBase64 });
 };
 
 // ===================================================================
-// ASYNC PNG PROCESSING
+// ASYNC PNG PROCESSING (handles both maps and flowcharts)
 // ===================================================================
 
 async function processPngJob(job_id, content, taskType, OPENAI_API, redis) {
@@ -554,21 +508,47 @@ async function processPngJob(job_id, content, taskType, OPENAI_API, redis) {
     job.feedback = feedback;
     await redis.setex(job_id, 7200, JSON.stringify(job));
 
-    // Detect content type for adaptive styling
-    const hasNatural = /island|beach|forest|tree|park|lake|countryside/i.test(content);
-    const hasUrban = /road|street|building|shop|school|housing|apartment/i.test(content);
+    // Generate prompt based on task type
+    let imgPrompt = "";
+    
+    if (taskType === "flowchart") {
+      // Flowchart-specific prompt
+      imgPrompt = `Create a professional IELTS Task 1 flowchart/process diagram based on this description.
 
-    let styleGuide = "";
-    if (hasNatural && !hasUrban) {
-      styleGuide = "Use illustrated pictorial style with soft 3D elements, like a storybook map. Warm, artistic rendering.";
-    } else if (hasUrban && !hasNatural) {
-      styleGuide = "Use clean architectural plan view, geometric 2D top-down perspective. Professional urban planning style.";
+REQUIREMENTS:
+- Clean, professional diagram style
+- Clear arrows showing process flow/sequence
+- Numbered steps if applicable
+- Labels for all stages/components
+- Simple, readable layout
+- Educational quality suitable for IELTS examination
+
+STYLE:
+- Use simple shapes (rectangles, circles, diamonds)
+- Clear directional arrows
+- Consistent spacing and alignment
+- Professional colors (blues, greys, neutral tones)
+- Black text labels in sans-serif font
+
+Description: ${content}
+
+Create a clear, educational flowchart that accurately represents this process.`;
+      
     } else {
-      styleGuide = "Use balanced semi-illustrated style mixing plan view and pictorial elements.";
-    }
+      // Maps-specific prompt (existing logic)
+      const hasNatural = /island|beach|forest|tree|park|lake|countryside/i.test(content);
+      const hasUrban = /road|street|building|shop|school|housing|apartment/i.test(content);
 
-    // Generate image with adaptive prompt
-    const imgPrompt = `Create a professional IELTS Task 1 map comparison showing "BEFORE" and "AFTER" layouts side-by-side.
+      let styleGuide = "";
+      if (hasNatural && !hasUrban) {
+        styleGuide = "Use illustrated pictorial style with soft 3D elements, like a storybook map. Warm, artistic rendering.";
+      } else if (hasUrban && !hasNatural) {
+        styleGuide = "Use clean architectural plan view, geometric 2D top-down perspective. Professional urban planning style.";
+      } else {
+        styleGuide = "Use balanced semi-illustrated style mixing plan view and pictorial elements.";
+      }
+
+      imgPrompt = `Create a professional IELTS Task 1 map comparison showing "BEFORE" and "AFTER" layouts side-by-side.
 
 ${styleGuide}
 
@@ -594,90 +574,83 @@ COLORS & STYLE:
 
 Format: High-quality IELTS examination material - educational, precise, uncluttered.
 
-Description: ${content.substring(0, 900)}`
+Description: ${content.substring(0, 900)}`;
+    }
 
-console.log(`🎨 Generating an image for job ${job_id}...`);
-console.log(`Using model: gpt-image-1.5`);
-console.log(`Prompt length: ${imgPrompt.length}`);
+    console.log(`🎨 Generating ${taskType} image for job ${job_id}...`);
+    console.log(`Using model: dall-e-3`);
+    console.log(`Prompt length: ${imgPrompt.length}`);
 
-const requestBody = {
-  model: "gpt-image-1.5",
-  prompt: imgPrompt,
-  size: "1024x1024",
-  n: 1
-};
+    const requestBody = {
+      model: "dall-e-3",
+      prompt: imgPrompt,
+      size: "1024x1024",
+      n: 1
+    };
 
-console.log(`Request body:`, JSON.stringify(requestBody, null, 2));
+    console.log(`Request body:`, JSON.stringify(requestBody, null, 2));
 
-const ir = await fetch(`${OPENAI_API}/images/generations`, {
-  method: "POST",
-  headers: {
-    Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify(requestBody)
-});
+    const ir = await fetch(`${OPENAI_API}/images/generations`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(requestBody)
+    });
 
-console.log(`Response status: ${ir.status}`);
-const responseText = await ir.text();
-console.log(`Response body (full): ${responseText}`);
+    console.log(`Response status: ${ir.status}`);
+    const responseText = await ir.text();
+    console.log(`Response body (full): ${responseText}`);
 
-if (!ir.ok) {
-  throw new Error(`Image API failed: ${ir.status} - ${responseText}`);
-}
+    if (!ir.ok) {
+      throw new Error(`Image API failed: ${ir.status} - ${responseText}`);
+    }
 
-let ij;
-try {
-  ij = JSON.parse(responseText);
-  console.log(`Parsed response:`, JSON.stringify(ij, null, 2));
-} catch (parseErr) {
-  throw new Error(`Failed to parse response: ${parseErr.message}`);
-}
+    let ij;
+    try {
+      ij = JSON.parse(responseText);
+      console.log(`Parsed response:`, JSON.stringify(ij, null, 2));
+    } catch (parseErr) {
+      throw new Error(`Failed to parse response: ${parseErr.message}`);
+    }
 
-// Check multiple possible response structures
-let imageUrl = null;
+    // Check multiple possible response structures
+    let imageUrl = null;
 
-// Structure 1: Standard OpenAI format
-if (ij?.data?.[0]?.url) {
-  imageUrl = ij.data[0].url;
-  console.log(`✅ Found image URL in data[0].url: ${imageUrl}`);
-}
-// Structure 2: Alternative format
-else if (ij?.data?.[0]?.image_url) {
-  imageUrl = ij.data[0].image_url;
-  console.log(`✅ Found image URL in data[0].image_url: ${imageUrl}`);
-}
-// Structure 3: Direct URL
-else if (ij?.url) {
-  imageUrl = ij.url;
-  console.log(`✅ Found image URL in root url: ${imageUrl}`);
-}
-// Structure 4: Base64 encoded (some models return this)
-else if (ij?.data?.[0]?.b64_json) {
-  console.log(`✅ Found base64 image in response`);
-  // Skip download step, use base64 directly
-  const base64 = ij.data[0].b64_json;
-  
-  job.status = JobStatus.COMPLETED;
-  job.result = {
-    generatedImageBase64: `data:image/png;base64,${base64}`,
-    usedPipeline: "gpt-image-1.5"
-  };
-  await redis.setex(job_id, 7200, JSON.stringify(job));
-  console.log(`✅ PNG job ${job_id} completed successfully (base64)`);
-  return;
-}
+    if (ij?.data?.[0]?.url) {
+      imageUrl = ij.data[0].url;
+      console.log(`✅ Found image URL in data[0].url: ${imageUrl}`);
+    } else if (ij?.data?.[0]?.image_url) {
+      imageUrl = ij.data[0].image_url;
+      console.log(`✅ Found image URL in data[0].image_url: ${imageUrl}`);
+    } else if (ij?.url) {
+      imageUrl = ij.url;
+      console.log(`✅ Found image URL in root url: ${imageUrl}`);
+    } else if (ij?.data?.[0]?.b64_json) {
+      console.log(`✅ Found base64 image in response`);
+      const base64 = ij.data[0].b64_json;
+      
+      job.status = JobStatus.COMPLETED;
+      job.result = {
+        generatedImageBase64: `data:image/png;base64,${base64}`,
+        usedPipeline: "dall-e-3"
+      };
+      await redis.setex(job_id, 7200, JSON.stringify(job));
+      console.log(`✅ ${taskType} job ${job_id} completed successfully (base64)`);
+      return;
+    }
 
-if (!imageUrl) {
-  console.error(`❌ Could not find image URL in response structure`);
-  console.error(`Available keys in response:`, Object.keys(ij));
-  if (ij?.data?.[0]) {
-    console.error(`Available keys in data[0]:`, Object.keys(ij.data[0]));
-  }
-  throw new Error("No image URL found in any expected location");
-}
+    if (!imageUrl) {
+      console.error(`❌ Could not find image URL in response structure`);
+      console.error(`Available keys in response:`, Object.keys(ij));
+      if (ij?.data?.[0]) {
+        console.error(`Available keys in data[0]:`, Object.keys(ij.data[0]));
+      }
+      throw new Error("No image URL found in any expected location");
+    }
 
-    console.log("✅ PNG URL generated, converting to base64...");
+    console.log("✅ Image URL generated, converting to base64...");
     
     // Download and convert to base64
     const imageResponse = await fetch(imageUrl);
@@ -696,10 +669,10 @@ if (!imageUrl) {
     };
     await redis.setex(job_id, 7200, JSON.stringify(job));
 
-    console.log(`✅ PNG job ${job_id} completed successfully`);
+    console.log(`✅ ${taskType} job ${job_id} completed successfully`);
 
   } catch (error) {
-    console.error(`❌ PNG job ${job_id} failed:`, error);
+    console.error(`❌ ${taskType} job ${job_id} failed:`, error);
     job.status = JobStatus.FAILED;
     job.error = error.message;
     await redis.setex(job_id, 7200, JSON.stringify(job));
