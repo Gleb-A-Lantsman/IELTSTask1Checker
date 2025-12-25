@@ -891,15 +891,78 @@
                       </div>
                     </div>
                   `;
-                } else if (pollData.asciiMaps) {
+             } else if (pollData.asciiMaps) {
                   comparisonContainer.innerHTML = `
+                    <div class="comparison-container">
+                      <div class="comparison-side">
+                        <h5>📊 Original Task Image</h5>
+                        <img src="${currentImageUrl}" alt="Original maps">
+                      </div>
+                      <div class="comparison-side">
+                        <h5>🗺️ ASCII Emoji Maps from Your Description</h5>
+                        <pre style="background:#fafafa; padding:15px; border-radius:4px; border:1px solid #ddd; font-family:monospace; overflow-x:auto; font-size:16px; line-height:1.2;">${pollData.asciiMaps}</pre>
+                        <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
+                          Generated based on your description. AI can make mistakes, check carefully.
+                        </p>
+                      </div>
+                    </div>
+                  `;
+                }
+
+                hideProgressBar();
+                isLoading = false;
+                feedbackButton.disabled = false;
+                helpButton.disabled = false;
+
+                return;
+              }
+
+              // Keep polling if still processing
+              if (pollData.status === "processing" || pollData.status === "pending") {
+                pollStatus.textContent = `Still generating... (${pollAttempts}/${maxAttempts})`;
+                return;
+              }
+
+            } catch (pollError) {
+              console.error('Poll error:', pollError);
+              // Continue polling despite errors
+            }
+          };
+
+          // Poll every 2 seconds
+          pollInterval = setInterval(checkStatus, 2000);
+          checkStatus(); // Initial check
+        }
+
+        function displayFullFeedback(data) {
+          feedbackContainer.innerHTML = formatFullFeedback(data.feedback);
+          comparisonContainer.style.display = "block";
+
+          if (data.asciiMaps) {
+            comparisonContainer.innerHTML = `
               <div class="comparison-container">
                 <div class="comparison-side">
                   <h5>📊 Original Task Image</h5>
-                  <img src="${currentImageUrl}" alt="Original task image">
+                  <img src="${currentImageUrl}" alt="Original maps">
                 </div>
                 <div class="comparison-side">
-                  <h5>🧮 ASCII Table from Your Description</h5>
+                  <h5>🗺️ ASCII Emoji Maps from Your Description</h5>
+                  <pre style="background:#fafafa; padding:15px; border-radius:4px; border:1px solid #ddd; font-family:monospace; overflow-x:auto; font-size:16px; line-height:1.2;">${data.asciiMaps}</pre>
+                  <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
+                    Generated based on your description. AI can make mistakes, check carefully.
+                  </p>
+                </div>
+              </div>
+            `;
+          } else if (data.asciiTable) {
+            comparisonContainer.innerHTML = `
+              <div class="comparison-container">
+                <div class="comparison-side">
+                  <h5>📊 Original Task Image</h5>
+                  <img src="${currentImageUrl}" alt="Original table">
+                </div>
+                <div class="comparison-side">
+                  <h5>📋 ASCII Table from Your Description</h5>
                   <pre style="background:#fafafa; padding:15px; border-radius:4px; border:1px solid #ddd; font-family:monospace; overflow-x:auto;">${data.asciiTable}</pre>
                   <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
                     Generated based on your description. AI can make mistakes, check carefully.
@@ -912,13 +975,13 @@
               <div class="comparison-container">
                 <div class="comparison-side">
                   <h5>📊 Original Task Image</h5>
-                  <img src="${currentImageUrl}" alt="Original task image">
+                  <img src="${currentImageUrl}" alt="Original task">
                 </div>
                 <div class="comparison-side">
-                  <h5>🐍 Python Chart from Your Description</h5>
-                  <img src="${data.generatedImageBase64}" alt="Generated chart" style="max-width: 100%; border-radius: 4px;">
+                  <h5>🎨 Generated from Your Description</h5>
+                  <img src="${data.generatedImageBase64}" alt="Generated visualization" style="max-width: 100%; border-radius: 4px;">
                   <p style="margin-top: 10px; font-size: 13px; color: #666; text-align: center;">
-                    Generated using Python (Matplotlib). AI can make mistakes, check carefully.
+                    Generated visualization. AI can make mistakes, check carefully.
                   </p>
                 </div>
               </div>
