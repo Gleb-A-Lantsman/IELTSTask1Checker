@@ -555,7 +555,14 @@ Create a clear, educational flowchart that accurately represents this process.`;
         styleGuide = "Use balanced semi-illustrated style mixing plan view and pictorial elements.";
       }
 
-      imgPrompt = `Create a professional IELTS Task 1 map comparison showing "BEFORE" and "AFTER" layouts side-by-side.
+      imgPrompt = `Create a professional IELTS Task 1 map comparison in LANDSCAPE format showing "BEFORE" and "AFTER" layouts side-by-side.
+
+**LAYOUT SPECIFICATIONS:**
+- Format: Horizontal/landscape orientation
+- Include generous margins: 8-10% padding on all sides
+- Position compass rose in bottom-left of BEFORE map, away from edge
+- Place legend at bottom center with clear spacing
+- Ensure "BEFORE" and "AFTER" titles have headroom
 
 ${styleGuide}
 
@@ -590,8 +597,8 @@ Description: ${content.substring(0, 900)}`;
   const requestBody = {
   model: "gpt-image-1.5",
   prompt: imgPrompt,
-  size: "1024x1024",
-  quality: job.quality || "high", // ✅ Use job-specified quality or default to high
+  size: "1536x1024", // ✅ Landscape for side-by-side layout
+  quality: "high",
   n: 1
 };
 
