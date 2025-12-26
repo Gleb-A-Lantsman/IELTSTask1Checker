@@ -7,7 +7,7 @@ const { Redis } = require("@upstash/redis");
 // Initialize Upstash Redis
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,  
 });
 
 // Job status types
@@ -520,7 +520,6 @@ async function processPngJob(job_id, content, taskType, OPENAI_API, redis) {
     let imgPrompt = "";
     
     if (taskType === "flowchart") {
-      // Flowchart-specific prompt
       imgPrompt = `Create a professional IELTS Task 1 flowchart/process diagram based on this description.
 
 REQUIREMENTS:
@@ -543,7 +542,7 @@ Description: ${content}
 Create a clear, educational flowchart that accurately represents this process.`;
       
     } else {
-      // Maps-specific prompt (existing logic)
+      // Maps-specific prompt
       const hasNatural = /island|beach|forest|tree|park|lake|countryside/i.test(content);
       const hasUrban = /road|street|building|shop|school|housing|apartment/i.test(content);
 
@@ -586,15 +585,15 @@ Description: ${content.substring(0, 900)}`;
     }
 
     console.log(`🎨 Generating ${taskType} image for job ${job_id}...`);
-    console.log(`Using model: dall-e-3`);
-    console.log(`Prompt length: ${imgPrompt.length}`);
+    console.log(`Using model: gpt-image-1.5`); // ✅ Updated log
 
-    const requestBody = {
-      model: "dall-e-3",
-      prompt: imgPrompt,
-      size: "1024x1024",
-      n: 1
-    };
+  const requestBody = {
+  model: "gpt-image-1.5",
+  prompt: imgPrompt,
+  size: "1024x1024",
+  quality: job.quality || "high", // ✅ Use job-specified quality or default to high
+  n: 1
+};
 
     console.log(`Request body:`, JSON.stringify(requestBody, null, 2));
 
@@ -642,7 +641,7 @@ Description: ${content.substring(0, 900)}`;
       job.status = JobStatus.COMPLETED;
       job.result = {
         generatedImageBase64: `data:image/png;base64,${base64}`,
-        usedPipeline: "dall-e-3"
+        usedPipeline: "gpt-image-1.5" // ✅ Updated pipeline name
       };
       await redis.setex(job_id, 7200, JSON.stringify(job));
       console.log(`✅ ${taskType} job ${job_id} completed successfully (base64)`);
@@ -673,7 +672,7 @@ Description: ${content.substring(0, 900)}`;
     job.status = JobStatus.COMPLETED;
     job.result = {
       generatedImageBase64: `data:image/png;base64,${base64}`,
-      usedPipeline: "dall-e-3"
+      usedPipeline: "gpt-image-1.5" // ✅ Updated pipeline name
     };
     await redis.setex(job_id, 7200, JSON.stringify(job));
 
