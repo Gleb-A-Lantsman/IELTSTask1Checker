@@ -428,44 +428,93 @@ if (requestType === "full-feedback" && (taskType === "maps" || taskType === "flo
         
       } else {
         // Handle other charts (line-graph, bar-chart, pie-chart) via E2B
-        let sandbox = null;
-        try {
-          sandbox = await Sandbox.create();
-          
-          const pythonPrompt = `Create Python matplotlib code to generate a ${taskType} based on this description: ${content}`;
-          
-          const codeResponse = await fetch(`${OPENAI_API}/chat/completions`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "gpt-4o-mini",
-              messages: [
-                { role: "system", content: "You are a Python matplotlib expert. Generate only the Python code, no explanations." },
-                { role: "user", content: pythonPrompt },
-              ],
-              temperature: 0.3,
-            }),
-          });
-          
-          if (codeResponse.ok) {
-            const codeJson = await codeResponse.json();
-            const pythonCode = codeJson?.choices?.[0]?.message?.content?.trim() || "";
-            
-            if (pythonCode) {
-              const execution = await sandbox.runCode(pythonCode);
-              if (execution.results && execution.results.length > 0) {
-                const chartImage = execution.results[0];
-                if (chartImage.png) {
-                  generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
-                  console.log("✅ Chart generated via E2B");
-                }
-              }
-            }
-          }
-        } catch (chartErr) {
+         let sandbox = null;
+  try {
+    console.log("🔬 Creating E2B sandbox for chart generation...");
+    sandbox = await Sandbox.create();
+    console.log("✅ Sandbox created successfully");
+    
+    const pythonPrompt = `Create Python matplotlib code to generate a ${taskType} based on this description: ${content}. 
+    
+    Requirements:
+    - Import matplotlib.pyplot as plt
+    - Use plt.savefig() to save the chart
+    - Include proper labels, title, and legend
+    - Use appropriate colors and styling`;
+    
+    console.log("🤖 Requesting Python code from GPT...");
+    const codeResponse = await fetch(`${OPENAI_API}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { 
+            role: "system", 
+            content: "You are a Python matplotlib expert. Generate only the Python code without markdown code blocks or explanations. The code should be ready to execute." 
+          },
+          { role: "user", content: pythonPrompt },
+        ],
+        temperature: 0.3,
+      }),
+    });
+    
+    if (!codeResponse.ok) {
+      throw new Error(`Code generation failed: ${codeResponse.status}`);
+    }
+    
+    const codeJson = await codeResponse.json();
+    const pythonCode = codeJson?.choices?.[0]?.message?.content?.trim() || "";
+    
+    if (!pythonCode) {
+      throw new Error("No Python code generated");
+    }
+    
+    console.log("📊 Executing Python code in sandbox...");
+    console.log("Code preview:", pythonCode.substring(0, 200));
+    
+    const execution = await sandbox.runCode(pythonCode);
+    
+    console.log("Execution results:", JSON.stringify(execution, null, 2));
+    
+    if (execution.error) {
+      throw new Error(`Code execution failed: ${execution.error}`);
+    }
+    
+    if (execution.results && execution.results.length > 0) {
+      const chartImage = execution.results[0];
+      if (chartImage.png) {
+        generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
+        console.log("✅ Chart generated via E2B");
+      } else {
+        console.warn("⚠️ No PNG data in execution results");
+      }
+    } else {
+      console.warn("⚠️ No results from code execution");
+    }
+    
+  } catch (chartErr) {
+    console.error("❌ Chart generation error:", chartErr);
+    console.error("Error details:", {
+      name: chartErr.name,
+      message: chartErr.message,
+      stack: chartErr.stack
+    });
+  } finally {
+    if (sandbox) {
+      try {
+        console.log("🧹 Cleaning up sandbox...");
+        await sandbox.kill(); // ✅ Correct method
+        console.log("✅ Sandbox terminated successfully");
+      } catch (killErr) {
+        console.error("⚠️ Error killing sandbox:", killErr);
+      }
+    }
+  }
+} catch (chartErr) {
           console.error("Chart generation error:", chartErr);
         } finally {
           if (sandbox) {
