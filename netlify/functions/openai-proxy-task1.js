@@ -436,15 +436,16 @@ if (requestType === "full-feedback" && taskType !== "maps" && taskType !== "flow
       
       const pythonPrompt = `Create Python matplotlib code to generate a ${taskType} based on this description: ${content}. 
       
-      Requirements:
-      - Import matplotlib.pyplot as plt
-      - DO NOT use plt.savefig() - use plt.show() instead so the chart is captured inline
-      - Include proper labels, title, and legend
-      - Use appropriate colors and styling
-      - Use plt.show() at the end (do NOT use plt.savefig)
-      - Make sure all arrays/lists used for plotting have exactly the same length
+Requirements:
+- Import matplotlib.pyplot as plt
+- DO NOT use plt.savefig() - use plt.show() instead so the chart is captured inline
+- Include proper labels, title, and legend
+- Use appropriate colors and styling
+- End with plt.show()
+- Make sure all arrays/lists used for plotting have exactly the same length`;
       
       console.log("🤖 Requesting Python code from GPT...");
+      
       const codeResponse = await fetch(`${OPENAI_API}/chat/completions`, {
         method: "POST",
         headers: {
