@@ -441,7 +441,8 @@ if (requestType === "full-feedback" && taskType !== "maps" && taskType !== "flow
       - DO NOT use plt.savefig() - use plt.show() instead so the chart is captured inline
       - Include proper labels, title, and legend
       - Use appropriate colors and styling
-      - End with plt.show()`;
+      - Use plt.show() at the end (do NOT use plt.savefig)
+      - Make sure all arrays/lists used for plotting have exactly the same length
       
       console.log("🤖 Requesting Python code from GPT...");
       const codeResponse = await fetch(`${OPENAI_API}/chat/completions`, {
@@ -478,24 +479,27 @@ if (requestType === "full-feedback" && taskType !== "maps" && taskType !== "flow
       console.log("Code preview:", pythonCode.substring(0, 200));
       
       const execution = await sandbox.runCode(pythonCode);
-      
-      console.log("Execution results:", JSON.stringify(execution, null, 2));
-      
-      if (execution.error) {
-        throw new Error(`Code execution failed: ${execution.error}`);
-      }
-      
-      if (execution.results && execution.results.length > 0) {
-        const chartImage = execution.results[0];
-        if (chartImage.png) {
-          generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
-          console.log("✅ Chart generated via E2B");
-        } else {
-          console.warn("⚠️ No PNG data in execution results");
-        }
-      } else {
-        console.warn("⚠️ No results from code execution");
-      }
+
+console.log("Execution results:", JSON.stringify(execution, null, 2));
+
+// Check for PNG first - it may exist even if there was also an error
+if (execution.results && execution.results.length > 0) {
+  const chartImage = execution.results[0];
+  if (chartImage.png) {
+    generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
+    console.log("✅ Chart generated via E2B");
+  } else {
+    console.warn("⚠️ No PNG data in execution results");
+    if (execution.error) {
+      throw new Error(`Code execution failed: ${execution.error.value || JSON.stringify(execution.error)}`);
+    }
+  }
+} else {
+  console.warn("⚠️ No results from code execution");
+  if (execution.error) {
+    throw new Error(`Code execution failed: ${execution.error.value || JSON.stringify(execution.error)}`);
+  }
+}
       
     } catch (chartErr) {
       console.error("❌ Chart generation error:", chartErr);
