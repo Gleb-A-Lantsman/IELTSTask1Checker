@@ -438,9 +438,10 @@ if (requestType === "full-feedback" && taskType !== "maps" && taskType !== "flow
       
       Requirements:
       - Import matplotlib.pyplot as plt
-      - Use plt.savefig() to save the chart
+      - DO NOT use plt.savefig() - use plt.show() instead so the chart is captured inline
       - Include proper labels, title, and legend
-      - Use appropriate colors and styling`;
+      - Use appropriate colors and styling
+      - End with plt.show()`;
       
       console.log("🤖 Requesting Python code from GPT...");
       const codeResponse = await fetch(`${OPENAI_API}/chat/completions`, {
