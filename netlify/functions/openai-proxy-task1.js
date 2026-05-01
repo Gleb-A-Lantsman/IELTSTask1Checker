@@ -434,15 +434,16 @@ if (requestType === "full-feedback" && taskType !== "maps" && taskType !== "flow
       sandbox = await Sandbox.create();
       console.log("✅ Sandbox created successfully");
       
-      const pythonPrompt = `Create Python matplotlib code to generate a ${taskType} based on this description: ${content}. 
-      
+           const pythonPrompt = `Create Python matplotlib code to generate a ${taskType} based on this description: ${content}. 
+
 Requirements:
 - Import matplotlib.pyplot as plt
-- DO NOT use plt.savefig() - use plt.show() instead so the chart is captured inline
+- DO NOT use pd.date_range() or any date-based x-axis - use simple lists like [2016, 2017, 2018...] or ['Jan', 'Feb'...] instead
+- Define x and y as plain Python lists with EXACTLY the same number of elements
+- DO NOT use assert statements
+- Use plt.show() at the end (do NOT use plt.savefig)
 - Include proper labels, title, and legend
-- Use appropriate colors and styling
-- End with plt.show()
-- Make sure all arrays/lists used for plotting have exactly the same length`;
+- Keep the code simple - no pandas, no numpy, just matplotlib and plain lists`;
       
       console.log("🤖 Requesting Python code from GPT...");
       
