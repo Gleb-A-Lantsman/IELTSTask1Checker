@@ -227,21 +227,20 @@ ${taskSpecificGuidance}
 
 exports.handler = async (event) => {
   try {
-const body = JSON.parse(event.body || "{}");
-let {  
-  content,
-  requestType,
-  taskType,
-  imageUrl,
-  imageName,
-  phase,
-  job_id
-} = body;
+    const body = JSON.parse(event.body || "{}");
+    let {  
+      content,
+      requestType,
+      taskType,
+      imageUrl,
+      imageName,
+      phase,
+      job_id
+    } = body;
 
-if (requestType === "full-feedback" && (taskType === "maps" || taskType === "flowchart") && !phase) {
-  phase = "submit";  // ✅ Now this works!
-}
-
+    if (requestType === "full-feedback" && (taskType === "maps" || taskType === "flowchart") && !phase) {
+      phase = "submit";
+    }
 
     const OPENAI_API = "https://api.openai.com/v1";
     const fetch = globalThis.fetch;
@@ -264,7 +263,6 @@ if (requestType === "full-feedback" && (taskType === "maps" || taskType === "flo
 
       const job = typeof jobData === 'string' ? JSON.parse(jobData) : jobData;
 
-      // Return current status for any job type
       if (job.status === JobStatus.PROCESSING || job.status === JobStatus.PENDING) {
         return ok({ status: job.status });
       }
@@ -340,7 +338,6 @@ if (requestType === "full-feedback" && (taskType === "maps" || taskType === "flo
       await redis.setex(job_id, 7200, JSON.stringify(job));
       console.log(`✅ Job stored in Redis: ${job_id}`);
 
-      // Start async processing (same function for both!)
       processPngJob(job_id, content, taskType, OPENAI_API, redis).catch(err => {
         console.error(`${taskType} job processing error:`, err);
       });
@@ -374,7 +371,6 @@ if (requestType === "full-feedback" && (taskType === "maps" || taskType === "flo
       await redis.setex(job_id, 3600, JSON.stringify(job));
       console.log(`✅ ASCII job stored in Redis: ${job_id}`);
 
-      // Start async processing
       processAsciiMapJob(job_id, content, taskType, OPENAI_API, redis).catch(err => {
         console.error("ASCII map job processing error:", err);
       });
@@ -386,161 +382,177 @@ if (requestType === "full-feedback" && (taskType === "maps" || taskType === "flo
       });
     }
 
-// --------------------------------------
-// 4) Tables & Charts ONLY (non-maps, non-flowchart, immediate)
-// --------------------------------------
-if (requestType === "full-feedback" && taskType !== "maps" && taskType !== "flowchart") {
-  let feedback = "";
-  let asciiTable = null;
-  let generatedImageBase64 = null;
+    // --------------------------------------
+    // 4) Tables & Charts ONLY (non-maps, non-flowchart, immediate)
+    // --------------------------------------
+    if (requestType === "full-feedback" && taskType !== "maps" && taskType !== "flowchart") {
+      let feedback = "";
+      let asciiTable = null;
+      let generatedImageBase64 = null;
 
-  // Get feedback using centralized function
-  feedback = await generateIELTSFeedback(content, taskType, OPENAI_API);
+      // Get feedback using centralized function
+      feedback = await generateIELTSFeedback(content, taskType, OPENAI_API);
 
-  // Handle tables
-  if (taskType === "table") {
-    const ar = await fetch(`${OPENAI_API}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          { 
-            role: "system", 
-            content: "You are an ASCII table generator. Convert descriptions into precise ASCII tables using | borders and proper alignment. Output ONLY the table, no explanations." 
+      // Handle tables
+      if (taskType === "table") {
+        const ar = await fetch(`${OPENAI_API}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json",
           },
-          { 
-            role: "user", 
-            content: `Create an ASCII table based on this description. Use | for borders and align columns properly:\n\n${content}` 
-          },
-        ],
-        temperature: 0.3,
-      }),
-    });
-    
-    if (ar.ok) {
-      const aj = await ar.json();
-      asciiTable = aj?.choices?.[0]?.message?.content?.trim() || "";
-    }
-    
-  } else {
-    // Handle other charts (line-graph, bar-chart, pie-chart) via E2B
-    let sandbox = null;
-    try {
-      console.log("🔬 Creating E2B sandbox for chart generation...");
-      sandbox = await Sandbox.create();
-      console.log("✅ Sandbox created successfully");
-      
-          const pythonPrompt = `Create Python matplotlib code to generate a ${taskType} based on this description: ${content}. 
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [
+              { 
+                role: "system", 
+                content: "You are an ASCII table generator. Convert descriptions into precise ASCII tables using | borders and proper alignment. Output ONLY the table, no explanations." 
+              },
+              { 
+                role: "user", 
+                content: `Create an ASCII table based on this description. Use | for borders and align columns properly:\n\n${content}` 
+              },
+            ],
+            temperature: 0.3,
+          }),
+        });
+        
+        if (ar.ok) {
+          const aj = await ar.json();
+          asciiTable = aj?.choices?.[0]?.message?.content?.trim() || "";
+        }
+        
+      } else {
+        // -------------------------------------------------------
+        // Handle charts (line-graph, bar-chart, pie-chart) via E2B
+        // -------------------------------------------------------
+        let sandbox = null;
+        try {
+          console.log("🔬 Creating E2B sandbox for chart generation...");
+          sandbox = await Sandbox.create();
+          console.log("✅ Sandbox created successfully");
+
+          // ✅ FIX: Use Agg backend + plt.gcf() so E2B can capture the figure
+          const pythonPrompt = `Create Python matplotlib code to generate a ${taskType} based on this description: ${content}.
 
 Requirements:
-- Start with: import matplotlib
-- Then: matplotlib.use('Agg')
-- Then: import matplotlib.pyplot as plt
-- Use plain Python lists for data (no pandas, no numpy)
-- Maximum 10 data points
-- DO NOT use plt.show() or plt.savefig()
-- End the code with JUST: plt.gcf()
-- Include proper title, axis labels, and legend
-- Use plt.tight_layout() before the final line`;
-      
-      console.log("🤖 Requesting Python code from GPT...");
-      
-      const codeResponse = await fetch(`${OPENAI_API}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [
-            { 
-              role: "system", 
-              content: "You are a Python matplotlib expert. Generate only the Python code without markdown code blocks or explanations. The code should be ready to execute." 
+- The FIRST line must be: import matplotlib
+- The SECOND line must be: matplotlib.use('Agg')
+- The THIRD line must be: import matplotlib.pyplot as plt
+- Use plain Python lists for all data values (no pandas, no numpy, no external libraries)
+- Maximum 10 data points on any axis
+- For x-axis labels use plain strings or integers only — NO dates, NO pd.date_range(), NO datetime objects
+- DO NOT use plt.show()
+- DO NOT use plt.savefig()
+- DO NOT use assert statements
+- DO NOT import any library other than matplotlib
+- Call plt.tight_layout() as the second-to-last line
+- The LAST line must be exactly: plt.gcf()
+- Include a clear title, axis labels, and legend`;
+
+          console.log("🤖 Requesting Python code from GPT...");
+          
+          const codeResponse = await fetch(`${OPENAI_API}/chat/completions`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              "Content-Type": "application/json",
             },
-            { role: "user", content: pythonPrompt },
-          ],
-          temperature: 0.3,
-        }),
-      });
-      
-      if (!codeResponse.ok) {
-        throw new Error(`Code generation failed: ${codeResponse.status}`);
-      }
-      
-      const codeJson = await codeResponse.json();
-      const pythonCode = codeJson?.choices?.[0]?.message?.content?.trim() || "";
-      
-      if (!pythonCode) {
-        throw new Error("No Python code generated");
-      }
-      
-      console.log("📊 Executing Python code in sandbox...");
-      console.log("Code preview:", pythonCode.substring(0, 200));
-      console.log("FULL PYTHON CODE:\n", pythonCode);
-      const execution = await sandbox.runCode(pythonCode);
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              messages: [
+                { 
+                  role: "system", 
+                  content: "You are a Python matplotlib expert. Output ONLY raw Python code — no markdown fences, no triple backticks, no explanations. The code must be ready to execute as-is." 
+                },
+                { role: "user", content: pythonPrompt },
+              ],
+              temperature: 0.3,
+            }),
+          });
+          
+          if (!codeResponse.ok) {
+            throw new Error(`Code generation failed: ${codeResponse.status}`);
+          }
+          
+          const codeJson = await codeResponse.json();
+          let pythonCode = codeJson?.choices?.[0]?.message?.content?.trim() || "";
+          
+          if (!pythonCode) {
+            throw new Error("No Python code generated");
+          }
 
-console.log("Execution results:", JSON.stringify(execution, null, 2));
+          // Strip any markdown fences GPT may have added despite instructions
+          pythonCode = pythonCode
+            .replace(/^```python\s*/i, "")
+            .replace(/^```\s*/i, "")
+            .replace(/\s*```$/i, "")
+            .trim();
+          
+          console.log("📊 Executing Python code in sandbox...");
+          console.log("=== FULL PYTHON CODE SENT TO E2B ===\n", pythonCode);
+          
+          const execution = await sandbox.runCode(pythonCode);
 
-// Check for PNG first - it may exist even if there was also an error
-if (execution.results && execution.results.length > 0) {
-  const chartImage = execution.results[0];
-  if (chartImage.png) {
-    generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
-    console.log("✅ Chart generated via E2B");
-  } else {
-    console.warn("⚠️ No PNG data in execution results");
-    if (execution.error) {
-      throw new Error(`Code execution failed: ${execution.error.value || JSON.stringify(execution.error)}`);
-    }
-  }
-} else {
-  console.warn("⚠️ No results from code execution");
-  if (execution.error) {
-    throw new Error(`Code execution failed: ${execution.error.value || JSON.stringify(execution.error)}`);
-  }
-}
-      
-    } catch (chartErr) {
-      console.error("❌ Chart generation error:", chartErr);
-      console.error("Error details:", {
-        name: chartErr.name,
-        message: chartErr.message,
-        stack: chartErr.stack
-      });
-    } finally {
-      if (sandbox) {
-        try {
-          console.log("🧹 Cleaning up sandbox...");
-          await sandbox.kill();
-          console.log("✅ Sandbox terminated successfully");
-        } catch (killErr) {
-          console.error("⚠️ Error killing sandbox:", killErr);
+          console.log("=== E2B EXECUTION RESULT ===");
+          console.log(JSON.stringify({
+            error: execution.error,
+            resultsCount: execution.results?.length,
+            resultKeys: execution.results?.[0] ? Object.keys(execution.results[0]) : [],
+            hasPng: !!execution.results?.[0]?.png,
+            logs: execution.logs
+          }, null, 2));
+
+          if (execution.results && execution.results.length > 0) {
+            const chartImage = execution.results[0];
+            if (chartImage.png) {
+              generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
+              console.log("✅ Chart generated successfully via E2B");
+            } else {
+              console.warn("⚠️ Result exists but has no PNG. Keys:", Object.keys(chartImage));
+              if (execution.error) {
+                throw new Error(`Code execution failed: ${execution.error.value || JSON.stringify(execution.error)}`);
+              }
+            }
+          } else {
+            console.warn("⚠️ No results array from E2B execution");
+            if (execution.error) {
+              throw new Error(`Code execution failed: ${execution.error.value || JSON.stringify(execution.error)}`);
+            }
+          }
+          
+        } catch (chartErr) {
+          console.error("❌ Chart generation error:", chartErr.message);
+          console.error("Stack:", chartErr.stack);
+          // Fail gracefully — feedback still returns, chart panel just won't show
+        } finally {
+          if (sandbox) {
+            try {
+              console.log("🧹 Cleaning up sandbox...");
+              await sandbox.kill();
+              console.log("✅ Sandbox terminated");
+            } catch (killErr) {
+              console.error("⚠️ Error killing sandbox:", killErr);
+            }
+          }
         }
       }
+
+      return ok({ feedback, asciiTable, generatedImageBase64 });
     }
-  } // ✅ This closing brace was critical - closes the else block
 
-  return ok({ feedback, asciiTable, generatedImageBase64 });
-}
+    // Default fallback
+    return ok({ 
+      feedback: "No operation matched your request."
+    });
 
-// Default fallback
-return ok({ 
-  feedback: "No operation matched your request."
-});
-
-    } catch (err) {
-  console.error("❌ HANDLER ERROR:", err);
-  console.error("Error name:", err.name);
-  console.error("Error message:", err.message);
-  console.error("Error stack:", err.stack);
-  
-  return fail(err);
-}
+  } catch (err) {
+    console.error("❌ HANDLER ERROR:", err);
+    console.error("Error name:", err.name);
+    console.error("Error message:", err.message);
+    console.error("Error stack:", err.stack);
+    return fail(err);
+  }
 };
 
 // ===================================================================
@@ -561,13 +573,11 @@ async function processPngJob(job_id, content, taskType, OPENAI_API, redis) {
   try {
     const fetch = globalThis.fetch;
 
-    // Get feedback using centralized function
     const feedback = await generateIELTSFeedback(content, taskType, OPENAI_API);
     
     job.feedback = feedback;
     await redis.setex(job_id, 7200, JSON.stringify(job));
 
-    // Generate prompt based on task type
     let imgPrompt = "";
     
     if (taskType === "flowchart") {
@@ -593,7 +603,6 @@ Description: ${content}
 Create a clear, educational flowchart that accurately represents this process.`;
       
     } else {
-      // Maps-specific prompt
       const hasNatural = /island|beach|forest|tree|park|lake|countryside/i.test(content);
       const hasUrban = /road|street|building|shop|school|housing|apartment/i.test(content);
 
@@ -643,15 +652,14 @@ Description: ${content.substring(0, 900)}`;
     }
 
     console.log(`🎨 Generating ${taskType} image for job ${job_id}...`);
-    console.log(`Using model: gpt-image-2`); // ✅ Updated log
 
-  const requestBody = {
-  model: "gpt-image-1.5",
-  prompt: imgPrompt,
-  size: "1536x1024", // ✅ Landscape for side-by-side layout
-  quality: "high",
-  n: 1
-};
+    const requestBody = {
+      model: "gpt-image-1.5",
+      prompt: imgPrompt,
+      size: "1536x1024",
+      quality: "high",
+      n: 1
+    };
 
     console.log(`Request body:`, JSON.stringify(requestBody, null, 2));
 
@@ -675,23 +683,21 @@ Description: ${content.substring(0, 900)}`;
     let ij;
     try {
       ij = JSON.parse(responseText);
-      console.log(`Parsed response:`, JSON.stringify(ij, null, 2));
     } catch (parseErr) {
       throw new Error(`Failed to parse response: ${parseErr.message}`);
     }
 
-    // Check multiple possible response structures
     let imageUrl = null;
 
     if (ij?.data?.[0]?.url) {
       imageUrl = ij.data[0].url;
-      console.log(`✅ Found image URL in data[0].url: ${imageUrl}`);
+      console.log(`✅ Found image URL in data[0].url`);
     } else if (ij?.data?.[0]?.image_url) {
       imageUrl = ij.data[0].image_url;
-      console.log(`✅ Found image URL in data[0].image_url: ${imageUrl}`);
+      console.log(`✅ Found image URL in data[0].image_url`);
     } else if (ij?.url) {
       imageUrl = ij.url;
-      console.log(`✅ Found image URL in root url: ${imageUrl}`);
+      console.log(`✅ Found image URL in root url`);
     } else if (ij?.data?.[0]?.b64_json) {
       console.log(`✅ Found base64 image in response`);
       const base64 = ij.data[0].b64_json;
@@ -699,7 +705,7 @@ Description: ${content.substring(0, 900)}`;
       job.status = JobStatus.COMPLETED;
       job.result = {
         generatedImageBase64: `data:image/png;base64,${base64}`,
-        usedPipeline: "gpt-image-1.5" // ✅ Updated pipeline name
+        usedPipeline: "gpt-image-1.5"
       };
       await redis.setex(job_id, 7200, JSON.stringify(job));
       console.log(`✅ ${taskType} job ${job_id} completed successfully (base64)`);
@@ -717,7 +723,6 @@ Description: ${content.substring(0, 900)}`;
 
     console.log("✅ Image URL generated, converting to base64...");
     
-    // Download and convert to base64
     const imageResponse = await fetch(imageUrl);
     if (!imageResponse.ok) {
       throw new Error(`Failed to download image: ${imageResponse.status}`);
@@ -726,11 +731,10 @@ Description: ${content.substring(0, 900)}`;
     const imageBuffer = await imageResponse.arrayBuffer();
     const base64 = Buffer.from(imageBuffer).toString('base64');
     
-    // Update job with result
     job.status = JobStatus.COMPLETED;
     job.result = {
       generatedImageBase64: `data:image/png;base64,${base64}`,
-      usedPipeline: "gpt-image-1.5" // ✅ Updated pipeline name
+      usedPipeline: "gpt-image-1.5"
     };
     await redis.setex(job_id, 7200, JSON.stringify(job));
 
@@ -762,7 +766,6 @@ async function processAsciiMapJob(job_id, content, taskType, OPENAI_API, redis) 
   try {
     const fetch = globalThis.fetch;
 
-    // Get feedback using centralized function (reuse from PNG if available)
     let feedback = job.feedback || "";
     
     if (!feedback) {
@@ -772,8 +775,7 @@ async function processAsciiMapJob(job_id, content, taskType, OPENAI_API, redis) 
     job.feedback = feedback;
     await redis.setex(job_id, 3600, JSON.stringify(job));
 
-    // Generate ASCII emoji maps
-const asciiPrompt = `You are an ASCII emoji map generator for IELTS Task 1 practice.
+    const asciiPrompt = `You are an ASCII emoji map generator for IELTS Task 1 practice.
 
 Create TWO side-by-side ASCII emoji maps (BEFORE and AFTER) based on this description.
 
@@ -871,7 +873,6 @@ Output ONLY the maps in monospace format. No markdown code blocks, no explanatio
 
     console.log("✅ ASCII emoji maps generated");
     
-    // Update job with result
     job.status = JobStatus.COMPLETED;
     job.result = {
       asciiMaps: asciiMaps,
@@ -903,7 +904,6 @@ function extractDirections(content) {
 }
 
 function extractQuantities(content) {
-  const quantities = [];
   const numberMatches = content.match(/\d+\s+(?:building|house|hotel|shop|road|tree|facility|facilities)/gi);
   if (numberMatches && numberMatches.length > 0) {
     return numberMatches.slice(0, 5).join(", ");
@@ -914,12 +914,9 @@ function extractQuantities(content) {
 function extractFeatures(content) {
   const features = [];
   
-  // Natural features
   if (/beach|coast|shore/i.test(content)) features.push("- Beach/coastal areas");
   if (/forest|tree|woodland/i.test(content)) features.push("- Trees/forested areas");
   if (/water|lake|pond|river/i.test(content)) features.push("- Water bodies");
-  
-  // Built structures
   if (/road|street|path/i.test(content)) features.push("- Roads/pathways");
   if (/hotel|accommodation/i.test(content)) features.push("- Hotels/accommodation");
   if (/house|housing|residential/i.test(content)) features.push("- Residential buildings");
