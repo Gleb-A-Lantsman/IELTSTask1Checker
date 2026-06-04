@@ -506,19 +506,14 @@ print('IMG:' + base64.b64encode(buf.getvalue()).decode())`;
             logs: execution.logs
           }, null, 2));
 
-          const stdoutLines = execution.logs?.stdout || [];
+const stdoutLines = execution.logs?.stdout || [];
 const imgLine = stdoutLines.find(line => line.startsWith('IMG:'));
 if (imgLine) {
   generatedImageBase64 = `data:image/png;base64,${imgLine.slice(4)}`;
   console.log("✅ Chart generated via savefig+stdout");
 } else {
   console.warn("⚠️ No IMG line in stdout. Stdout was:", stdoutLines);
-} else {
-            console.warn("⚠️ No results array from E2B execution");
-            if (execution.error) {
-              throw new Error(`Code execution failed: ${execution.error.value || JSON.stringify(execution.error)}`);
-            }
-          }
+}
           
         } catch (chartErr) {
           console.error("❌ Chart generation error:", chartErr.message);
