@@ -506,34 +506,14 @@ print('IMG:' + base64.b64encode(buf.getvalue()).decode())`;
             logs: execution.logs
           }, null, 2));
 
-          if (execution.results && execution.results.length > 0) {
-            const chartImage = execution.results[0];
-console.log("=== CHART IMAGE RAW VALUES ===", JSON.stringify({
-  png: chartImage.png ? chartImage.png.substring(0, 50) : null,
-  svg: chartImage.svg ? chartImage.svg.substring(0, 50) : null,
-  html: chartImage.html ? chartImage.html.substring(0, 50) : null,
-  text: chartImage.text ? chartImage.text.substring(0, 50) : null,
-  chart: chartImage.chart ? JSON.stringify(chartImage.chart).substring(0, 100) : null,
-  data: chartImage.data ? JSON.stringify(chartImage.data).substring(0, 100) : null,
-  raw: chartImage.raw ? JSON.stringify(chartImage.raw).substring(0, 100) : null,
-  isMainResult: chartImage.isMainResult
-}));
-            if (chartImage.png) {
-  generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
-  console.log("✅ Chart generated as PNG via E2B");
-} else if (chartImage.svg) {
-  // E2B returns SVG — encode it as a data URL the browser can render in <img>
-  const svgBase64 = Buffer.from(chartImage.svg).toString('base64');
-  generatedImageBase64 = `data:image/svg+xml;base64,${svgBase64}`;
-  console.log("✅ Chart generated as SVG via E2B");
+          const stdoutLines = execution.logs?.stdout || [];
+const imgLine = stdoutLines.find(line => line.startsWith('IMG:'));
+if (imgLine) {
+  generatedImageBase64 = `data:image/png;base64,${imgLine.slice(4)}`;
+  console.log("✅ Chart generated via savefig+stdout");
 } else {
-  console.warn("⚠️ Result exists but has no PNG or SVG. Keys:", Object.keys(chartImage));
-  if (execution.error) {
-    throw new Error(`Code execution failed: ${execution.error.value || JSON.stringify(execution.error)}`);
-  }
-}
-            
-          } else {
+  console.warn("⚠️ No IMG line in stdout. Stdout was:", stdoutLines);
+} else {
             console.warn("⚠️ No results array from E2B execution");
             if (execution.error) {
               throw new Error(`Code execution failed: ${execution.error.value || JSON.stringify(execution.error)}`);
