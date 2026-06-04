@@ -433,22 +433,25 @@ exports.handler = async (event) => {
           console.log("✅ Sandbox created successfully");
 
           // ✅ FIX: Use Agg backend + plt.gcf() so E2B can capture the figure
-          const pythonPrompt = `Create Python matplotlib code to generate a ${taskType} based on this description: ${content}.
+const pythonPrompt = `Create Python matplotlib code to generate a ${taskType} based on this description: ${content}.
 
 Requirements:
 - The FIRST line must be: import matplotlib
 - The SECOND line must be: matplotlib.use('Agg')
 - The THIRD line must be: import matplotlib.pyplot as plt
+- The FOURTH line must be: import io, base64
 - Use plain Python lists for all data values (no pandas, no numpy, no external libraries)
 - Maximum 10 data points on any axis
-- For x-axis labels use plain strings or integers only — NO dates, NO pd.date_range(), NO datetime objects
+- For x-axis labels use plain strings or integers only
 - DO NOT use plt.show()
-- DO NOT use plt.savefig()
+- DO NOT use plt.gcf()
 - DO NOT use assert statements
-- DO NOT import any library other than matplotlib
-- Call plt.tight_layout() as the second-to-last line
-- The LAST line must be exactly: plt.gcf()
-- Include a clear title, axis labels, and legend`;
+- DO NOT import any library other than matplotlib, io, base64
+- Include a clear title, axis labels, and legend
+- The LAST three lines must be exactly:
+buf = io.BytesIO()
+plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+print('IMG:' + base64.b64encode(buf.getvalue()).decode())`;
 
           console.log("🤖 Requesting Python code from GPT...");
           
