@@ -506,14 +506,20 @@ Requirements:
           if (execution.results && execution.results.length > 0) {
             const chartImage = execution.results[0];
             if (chartImage.png) {
-              generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
-              console.log("✅ Chart generated successfully via E2B");
-            } else {
-              console.warn("⚠️ Result exists but has no PNG. Keys:", Object.keys(chartImage));
-              if (execution.error) {
-                throw new Error(`Code execution failed: ${execution.error.value || JSON.stringify(execution.error)}`);
-              }
-            }
+  generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
+  console.log("✅ Chart generated as PNG via E2B");
+} else if (chartImage.svg) {
+  // E2B returns SVG — encode it as a data URL the browser can render in <img>
+  const svgBase64 = Buffer.from(chartImage.svg).toString('base64');
+  generatedImageBase64 = `data:image/svg+xml;base64,${svgBase64}`;
+  console.log("✅ Chart generated as SVG via E2B");
+} else {
+  console.warn("⚠️ Result exists but has no PNG or SVG. Keys:", Object.keys(chartImage));
+  if (execution.error) {
+    throw new Error(`Code execution failed: ${execution.error.value || JSON.stringify(execution.error)}`);
+  }
+}
+            
           } else {
             console.warn("⚠️ No results array from E2B execution");
             if (execution.error) {
