@@ -434,18 +434,18 @@ if (requestType === "full-feedback" && taskType !== "maps" && taskType !== "flow
       sandbox = await Sandbox.create();
       console.log("✅ Sandbox created successfully");
       
-           const pythonPrompt = `Create Python matplotlib code to generate a ${taskType} based on this description: ${content}. 
+          const pythonPrompt = `Create Python matplotlib code to generate a ${taskType} based on this description: ${content}. 
 
 Requirements:
-- Import matplotlib.pyplot as plt only (no pandas, no numpy)
-- Use plain Python lists for x and y values, with EXACTLY the same number of elements
-- For x-axis: use ONLY year numbers like [2016, 2017, 2018, 2019, 2020] - maximum 10 data points total
-- DO NOT use monthly dates or string labels with months
-- DO NOT use pd.date_range() or any date functions
-- DO NOT use assert statements
-- Use plt.xticks(x) to set tick positions explicitly so labels never overlap
-- Use plt.show() at the end (do NOT use plt.savefig)
-- Include proper title, axis labels, and legend`;
+- Start with: import matplotlib
+- Then: matplotlib.use('Agg')
+- Then: import matplotlib.pyplot as plt
+- Use plain Python lists for data (no pandas, no numpy)
+- Maximum 10 data points
+- DO NOT use plt.show() or plt.savefig()
+- End the code with JUST: plt.gcf()
+- Include proper title, axis labels, and legend
+- Use plt.tight_layout() before the final line`;
       
       console.log("🤖 Requesting Python code from GPT...");
       
@@ -481,7 +481,7 @@ Requirements:
       
       console.log("📊 Executing Python code in sandbox...");
       console.log("Code preview:", pythonCode.substring(0, 200));
-      
+      console.log("FULL PYTHON CODE:\n", pythonCode);
       const execution = await sandbox.runCode(pythonCode);
 
 console.log("Execution results:", JSON.stringify(execution, null, 2));
