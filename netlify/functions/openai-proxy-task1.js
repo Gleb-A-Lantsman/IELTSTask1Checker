@@ -447,6 +447,7 @@ Requirements:
 - DO NOT use plt.gcf()
 - DO NOT use assert statements
 - DO NOT import any library other than matplotlib, io, base64
+- CRITICAL: Every x-axis list and its corresponding y-axis list MUST have EXACTLY the same number of elements. Count carefully before writing the lists.
 - Include a clear title, axis labels, and legend
 - The LAST three lines must be exactly:
 buf = io.BytesIO()
@@ -494,6 +495,26 @@ print('IMG:' + base64.b64encode(buf.getvalue()).decode())`;
           
           console.log("📊 Executing Python code in sandbox...");
           console.log("=== FULL PYTHON CODE SENT TO E2B ===\n", pythonCode);
+
+          // Validate array length parity before running
+const arrayMatches = [...pythonCode.matchAll(/=\s*\[([^\]]+)\]/g)];
+if (arrayMatches.length >= 2) {
+  const lengths = arrayMatches.map(m => 
+    m[1].split(',').filter(s => s.trim().length > 0).length
+  );
+  const allSame = lengths.every(l => l === lengths[0]);
+  if (!allSame) {
+    console.warn("⚠️ Array length mismatch detected before execution:", lengths);
+    // Trim all arrays to the shortest length
+    const minLen = Math.min(...lengths);
+    console.log(`Trimming all arrays to ${minLen} elements`);
+    pythonCode = pythonCode.replace(/=\s*\[([^\]]+)\]/g, (match, inner) => {
+      const items = inner.split(',').filter(s => s.trim().length > 0);
+      return `= [${items.slice(0, minLen).join(', ')}]`;
+    });
+    console.log("Fixed code:\n", pythonCode);
+  }
+}
           
           const execution = await sandbox.runCode(pythonCode);
 
