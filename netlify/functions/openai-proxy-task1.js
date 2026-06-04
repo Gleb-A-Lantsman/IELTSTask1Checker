@@ -505,6 +505,16 @@ Requirements:
 
           if (execution.results && execution.results.length > 0) {
             const chartImage = execution.results[0];
+console.log("=== CHART IMAGE RAW VALUES ===", JSON.stringify({
+  png: chartImage.png ? chartImage.png.substring(0, 50) : null,
+  svg: chartImage.svg ? chartImage.svg.substring(0, 50) : null,
+  html: chartImage.html ? chartImage.html.substring(0, 50) : null,
+  text: chartImage.text ? chartImage.text.substring(0, 50) : null,
+  chart: chartImage.chart ? JSON.stringify(chartImage.chart).substring(0, 100) : null,
+  data: chartImage.data ? JSON.stringify(chartImage.data).substring(0, 100) : null,
+  raw: chartImage.raw ? JSON.stringify(chartImage.raw).substring(0, 100) : null,
+  isMainResult: chartImage.isMainResult
+}));
             if (chartImage.png) {
   generatedImageBase64 = `data:image/png;base64,${chartImage.png}`;
   console.log("✅ Chart generated as PNG via E2B");
